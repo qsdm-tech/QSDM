@@ -57,6 +57,7 @@ import { useCreateMissingKPLStakingKey } from 'renderer/features/shared/hooks/us
 import { useKplToken } from 'renderer/features/tokens/hooks/useKplToken';
 import {
   getQsdmCoreStatus,
+  getQsdmMinerRewardStatus,
   getKPLStakingAccountPubKey,
   QueryKeys,
   stopTask,
@@ -77,7 +78,10 @@ import { useMyTaskStake } from '../../hooks/useMyTaskStake';
 import { useTaskStatsData } from '../../hooks/useTaskStatsData';
 import { useTaskWalletBalance } from '../../hooks/useTaskWalletBalance';
 import { isNetworkingTask } from '../../utils';
-import { getTaskBalanceEligibility } from '../../utils/taskBalanceEligibility';
+import {
+  getTaskBalanceEligibility,
+  isQsdmMinerBondFromRewards,
+} from '../../utils/taskBalanceEligibility';
 import { SuccessMessage } from '../AvailableTasksTable/components/SuccessMessage';
 import { RoundTime } from '../common/RoundTime';
 import { CurrencyDisplay } from '../MyNodeTaskRow/components/CurrencyDisplay';
@@ -154,10 +158,22 @@ function AvailableTaskRow({ task, columnsLayout, isPrivate }: Props) {
   const isBonusTask =
     taskName === BONUS_TASK_NAME && task.taskManager === BONUS_TASK_DEPLOYER;
 
-  const deferredMinerBondAvailable = Boolean(
-    isQsdmMinerSystemTask &&
-      qsdmCoreStatus?.status?.mining?.deferred_bond_from_rewards
+  // The miner's enrollment (shared with the Miner panel's query): an active
+  // "Use mining earnings" bond that is not fully_bonded yet keeps the wallet
+  // empty by design.
+  const { data: minerRewardStatus } = useQuery(
+    [QueryKeys.QsdmMinerRewardStatus, publicKey],
+    getQsdmMinerRewardStatus,
+    { enabled: isQsdmMinerSystemTask, staleTime: 5000 }
   );
+
+  const deferredMinerBondAvailable =
+    isQsdmMinerSystemTask &&
+    isQsdmMinerBondFromRewards({
+      networkOffersDeferredBond:
+        qsdmCoreStatus?.status?.mining?.deferred_bond_from_rewards,
+      enrollment: minerRewardStatus?.enrollment,
+    });
 
   const { data: mainAccountPubKey = '' } = useMainAccount();
   const {
