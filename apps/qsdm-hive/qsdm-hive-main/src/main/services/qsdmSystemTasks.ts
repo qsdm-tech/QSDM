@@ -4436,10 +4436,38 @@ export const startQsdmSkyFangLinkSystemProcess = (
   };
 };
 
-const waitForChildProcessStartup = (
+// Node can emit 'exit' before the last stdout/stderr chunks; 'close' comes
+// after them. The pipes of an exited process end at once, so this cap only
+// matters when a helper process (the CUDA solver) inherited a pipe and still
+// runs. One second is ample for the first case and short for the error.
+const QSDM_PROCESS_OUTPUT_DRAIN_MS = 1000;
+
+const waitForChildClose = (child: ChildProcess) =>
+  new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, QSDM_PROCESS_OUTPUT_DRAIN_MS);
+    timer.unref();
+    child.once('close', () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+
+// What one start of a process left behind, for its startup error.
+export type QsdmProcessStartupOutput = {
+  // The process's newest stderr lines of this start: the lines Hive also
+  // writes to the task's task.log.
+  stderr?: () => string;
+  // The process log file (miner.log) before the start. Its tail is shown only
+  // if this start wrote to it: a miner that stops before it opens --log-file
+  // (an unreadable miner.toml, for one) leaves an older run's lines there.
+  logBefore?: QsdmFileState | null;
+};
+
+export const waitForChildProcessStartup = (
   child: ChildProcess,
   label: string,
-  logPath: string
+  logPath: string,
+  output: QsdmProcessStartupOutput = {}
 ) =>
   new Promise<void>((resolve, reject) => {
     let settled = false;
@@ -4456,9 +4484,18 @@ const waitForChildProcessStartup = (
 
     const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
       cleanup();
-      reject(
-        new Error(buildProcessStartupExitDetail(label, code, signal, logPath))
-      );
+      waitForChildClose(child)
+        .then(() =>
+          reject(
+            new Error(
+              buildProcessStartupExitDetail(label, code, signal, logPath, {
+                stderr: output.stderr?.(),
+                logBefore: output.logBefore,
+              })
+            )
+          )
+        )
+        .catch(reject);
     };
 
     const onError = (error: Error) => {
@@ -4476,23 +4513,77 @@ const waitForChildProcessStartup = (
     child.once('error', onError);
   });
 
-const readProcessLogTail = (logPath: string, maxLines = 12) => {
+// The error shows at most this much output: enough for the reason a process
+// stopped without filling the error dialog.
+const QSDM_PROCESS_OUTPUT_TAIL_LINES = 12;
+const QSDM_PROCESS_OUTPUT_TAIL_CHARS = 2000;
+
+const formatProcessOutputTail = (text: string) =>
+  redactQsdmMinerSecrets(
+    text
+      // eslint-disable-next-line no-control-regex
+      .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+      .split(/\r?\n|\r/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .slice(-QSDM_PROCESS_OUTPUT_TAIL_LINES)
+      .join('\n')
+  ).slice(-QSDM_PROCESS_OUTPUT_TAIL_CHARS);
+
+// Keeps the newest lines of a process stream (already redacted).
+export const createQsdmProcessOutputTail = () => {
+  let lines: string[] = [];
+  return {
+    push: (text: string) => {
+      lines = [...lines, ...text.split(/\r?\n|\r/)]
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .slice(-QSDM_PROCESS_OUTPUT_TAIL_LINES);
+    },
+    text: () => lines.join('\n'),
+  };
+};
+
+export type QsdmFileState = { size: number; mtimeMs: number };
+
+export const readQsdmFileState = (filePath: string): QsdmFileState | null => {
   try {
+    const stat = fs.statSync(filePath);
+    return { size: stat.size, mtimeMs: stat.mtimeMs };
+  } catch {
+    return null;
+  }
+};
+
+// The lines a file got since `before`: from the old end when it only grew,
+// the whole file when it is new or was rotated, nothing when unchanged.
+const readProcessLogSince = (logPath: string, before: QsdmFileState | null) => {
+  const after = readQsdmFileState(logPath);
+  if (!after) return '';
+  if (before && after.size === before.size && after.mtimeMs === before.mtimeMs)
+    return '';
+  if (!before || after.size < before.size)
+    return fs.readFileSync(logPath, 'utf8');
+  const length = after.size - before.size;
+  const buffer = Buffer.alloc(length);
+  const fd = fs.openSync(logPath, 'r');
+  try {
+    const read = fs.readSync(fd, buffer, 0, length, before.size);
+    return buffer.subarray(0, read).toString('utf8');
+  } finally {
+    fs.closeSync(fd);
+  }
+};
+
+const readProcessLogTail = (logPath: string, before?: QsdmFileState | null) => {
+  try {
+    if (before !== undefined) {
+      return formatProcessOutputTail(readProcessLogSince(logPath, before));
+    }
     if (!fs.existsSync(logPath)) {
       return '';
     }
-
-    return redactQsdmMinerSecrets(
-      fs
-        .readFileSync(logPath, 'utf8')
-        // eslint-disable-next-line no-control-regex
-        .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .slice(-maxLines)
-        .join('\n')
-    ).slice(-2000);
+    return formatProcessOutputTail(fs.readFileSync(logPath, 'utf8'));
   } catch {
     return '';
   }
@@ -4502,7 +4593,8 @@ export const buildProcessStartupExitDetail = (
   label: string,
   code: number | null,
   signal: NodeJS.Signals | null,
-  logPath: string
+  logPath: string,
+  start: { stderr?: string; logBefore?: QsdmFileState | null } = {}
 ) => {
   const protocolDetail =
     label === 'QSDM Miner' && code === 3
@@ -4510,15 +4602,17 @@ export const buildProcessStartupExitDetail = (
       : label === 'QSDM Miner' && code === 2
       ? ' The QSDM Miner configuration is incomplete or invalid.'
       : '';
-  const logTail = readProcessLogTail(logPath);
+  const stderrTail = formatProcessOutputTail(start.stderr || '');
+  const logTail = readProcessLogTail(logPath, start.logBefore);
   const operatorSigningDetail =
     label === 'QSDM Miner' &&
-    /operator (?:signer|keystore|passphrase)/i.test(logTail)
+    /operator (?:signer|keystore|passphrase)/i.test(`${stderrTail}\n${logTail}`)
       ? ` The miner could not load the operator signing key from the Hive wallet. ${QSDM_MINER_UNLOCK_WALLET_MESSAGE} Open Settings > Wallet, unlock the wallet with its passphrase, then start the QSDM Miner again.`
       : '';
+  const stderrDetail = stderrTail ? `\nMiner error output:\n${stderrTail}` : '';
   const logDetail = logTail ? `\nMiner log tail:\n${logTail}` : '';
 
-  return `${label} exited during startup with code ${code} and signal ${signal}.${protocolDetail}${operatorSigningDetail} Log: ${logPath}.${logDetail}`;
+  return `${label} exited during startup with code ${code} and signal ${signal}.${protocolDetail}${operatorSigningDetail} Log: ${logPath}.${stderrDetail}${logDetail}`;
 };
 
 export const startQsdmMinerSystemProcess = async (
@@ -4610,6 +4704,11 @@ export const startQsdmMinerSystemProcess = async (
     )}`
   );
 
+  // The miner writes to stderr until it opens --log-file, so an early failure
+  // (miner.toml it cannot read, for one) is only in stderr and task.log.
+  const logBefore = readQsdmFileState(logPath);
+  const stderrTail = createQsdmProcessOutputTail();
+
   const child = spawn(executablePath, args, {
     detached: false,
     shell: false,
@@ -4623,12 +4722,11 @@ export const startQsdmMinerSystemProcess = async (
       redactQsdmMinerSecrets(data.toString().trimEnd())
     )
   );
-  child.stderr?.on('data', (data) =>
-    writeTaskLog(
-      QSDM_MINER_SYSTEM_TASK_ID,
-      redactQsdmMinerSecrets(data.toString().trimEnd())
-    )
-  );
+  child.stderr?.on('data', (data) => {
+    const text = redactQsdmMinerSecrets(data.toString().trimEnd());
+    stderrTail.push(text);
+    writeTaskLog(QSDM_MINER_SYSTEM_TASK_ID, text);
+  });
   child.on('error', (error) =>
     writeTaskLog(
       QSDM_MINER_SYSTEM_TASK_ID,
@@ -4637,7 +4735,10 @@ export const startQsdmMinerSystemProcess = async (
   );
 
   try {
-    await waitForChildProcessStartup(child, 'QSDM Miner', logPath);
+    await waitForChildProcessStartup(child, 'QSDM Miner', logPath, {
+      stderr: stderrTail.text,
+      logBefore,
+    });
   } catch (error: any) {
     const message =
       error instanceof Error
