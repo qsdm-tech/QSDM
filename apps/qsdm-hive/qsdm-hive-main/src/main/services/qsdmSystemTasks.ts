@@ -73,6 +73,10 @@ import { getAppDataPath } from 'main/node/helpers/getAppDataPath';
 import { AsyncSingleFlight } from 'main/services/asyncSingleFlight';
 import { qsdmGetFirstJson, qsdmGetJson } from 'main/services/qsdmHttpRead';
 import {
+  setQsdmMinerConfigStringValue,
+  writeQsdmMinerConfigFile,
+} from 'main/services/qsdmMinerConfigFile';
+import {
   assertQsdmMinerEnrollmentReady,
   prepareQsdmMinerV2Config,
 } from 'main/services/qsdmMinerEnrollment';
@@ -3184,30 +3188,6 @@ const readMinerConfigStringValue = (config: string, key: string) => {
   return (match?.[1] || match?.[2] || match?.[3] || '').trim();
 };
 
-const escapeTomlString = (value: string) =>
-  value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-
-const setMinerConfigStringValue = (
-  config: string,
-  key: string,
-  value: string
-) => {
-  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const line = `${key} = "${escapeTomlString(value)}"`;
-  const matcher = new RegExp(
-    `^\\s*${escapedKey}\\s*=\\s*(?:"[^"]*"|'[^']*'|[^#\\r\\n]*)`,
-    'm'
-  );
-
-  if (matcher.test(config)) {
-    return config.replace(matcher, line);
-  }
-
-  const separator =
-    config.trim().length > 0 && !config.endsWith('\n') ? '\n' : '';
-  return `${config}${separator}${line}\n`;
-};
-
 export const getQsdmMinerRewardAddressInfo =
   (): QsdmMinerRewardAddressInfo | null => {
     const signer = getQsdmTaskActionSender();
@@ -3295,13 +3275,15 @@ export const setQsdmMinerRewardAddressToSigner =
       'validator_url'
     );
     const desiredValidator = resolveQsdmMinerValidatorBaseUrl();
-    let updatedConfig = setMinerConfigStringValue(
+    // The result has LF line endings only, so a file with CR line endings is
+    // rewritten even when the address and validator are already right.
+    let updatedConfig = setQsdmMinerConfigStringValue(
       previousConfig,
       'reward_address',
       signer
     );
     if (currentValidator !== desiredValidator) {
-      updatedConfig = setMinerConfigStringValue(
+      updatedConfig = setQsdmMinerConfigStringValue(
         updatedConfig,
         'validator_url',
         desiredValidator
@@ -3311,14 +3293,16 @@ export const setQsdmMinerRewardAddressToSigner =
     let backupPath: string | undefined;
     if (
       fs.existsSync(configPath) &&
-      (currentAddress !== signer || currentValidator !== desiredValidator)
+      (currentAddress !== signer ||
+        currentValidator !== desiredValidator ||
+        previousConfig.includes('\r'))
     ) {
       backupPath = `${configPath}.bak-${Date.now()}`;
       fs.copyFileSync(configPath, backupPath);
     }
 
     if (updatedConfig !== previousConfig) {
-      fs.writeFileSync(configPath, updatedConfig, 'utf8');
+      writeQsdmMinerConfigFile(configPath, updatedConfig);
     }
 
     const info = getQsdmMinerRewardAddressInfo();

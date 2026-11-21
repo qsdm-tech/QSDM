@@ -16,6 +16,10 @@ import {
 } from 'config/qsdm';
 import { assertQsdmCanonicalChainSafety } from 'main/services/qsdmCanonicalChain';
 import {
+  setQsdmMinerConfigStringValue,
+  writeQsdmMinerConfigFile,
+} from 'main/services/qsdmMinerConfigFile';
+import {
   getQsdmTaskActionCliPath,
   getQsdmTaskActionKeystorePath,
   getQsdmTaskActionPassphraseFile,
@@ -275,21 +279,7 @@ const readConfigValue = (config: string, key: string) => {
     : value;
 };
 
-const escapeToml = (value: string) =>
-  value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-
-const setConfigValue = (config: string, key: string, value: string) => {
-  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const line = `${key} = "${escapeToml(value)}"`;
-  const matcher = new RegExp(
-    `^\\s*${escaped}\\s*=\\s*(?:"[^"]*"|'[^']*'|[^#\\r\\n]*)`,
-    'm'
-  );
-  if (matcher.test(config)) return config.replace(matcher, line);
-  return `${config}${
-    config.trim() && !config.endsWith('\n') ? '\n' : ''
-  }${line}\n`;
-};
+const setConfigValue = setQsdmMinerConfigStringValue;
 
 export const buildQsdmMinerNodeId = (
   hostname: string,
@@ -405,6 +395,8 @@ export const prepareQsdmMinerV2Config =
       reward_address: signer,
       validator_url: validatorBaseUrl(),
     };
+    // setConfigValue returns LF-only text, so a file with CR line endings
+    // differs and is rewritten here even when no value changed.
     const updated = Object.entries(values).reduce(
       (config, [key, value]) => setConfigValue(config, key, value),
       previous
@@ -412,8 +404,7 @@ export const prepareQsdmMinerV2Config =
     if (updated !== previous && fs.existsSync(configPath)) {
       fs.copyFileSync(configPath, `${configPath}.bak-${Date.now()}`);
     }
-    if (updated !== previous)
-      fs.writeFileSync(configPath, updated, { encoding: 'utf8', mode: 0o600 });
+    if (updated !== previous) writeQsdmMinerConfigFile(configPath, updated);
     return { ...gpu, nodeId, hmacKeyPath, configPath };
   };
 
@@ -430,10 +421,7 @@ const rotateLegacyMinerNodeId = (
     identity.configPath,
     `${identity.configPath}.bak-${Date.now()}`
   );
-  fs.writeFileSync(identity.configPath, updated, {
-    encoding: 'utf8',
-    mode: 0o600,
-  });
+  writeQsdmMinerConfigFile(identity.configPath, updated);
   return { ...identity, nodeId };
 };
 
@@ -543,10 +531,7 @@ export const writeQsdmAdoptedMinerIdentity = (
   const updated = setConfigValue(previous, 'node_id', nodeId);
   if (updated !== previous) {
     fs.copyFileSync(identity.configPath, `${identity.configPath}.bak-${now}`);
-    fs.writeFileSync(identity.configPath, updated, {
-      encoding: 'utf8',
-      mode: 0o600,
-    });
+    writeQsdmMinerConfigFile(identity.configPath, updated);
   }
   return { ...identity, nodeId };
 };
