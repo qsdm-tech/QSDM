@@ -20,6 +20,7 @@ import { SystemDbKeys } from 'config/systemDbKeys';
 import cryptoRandomString from 'crypto-random-string';
 import { Application } from 'express';
 import { get } from 'lodash';
+import { isQsdmMiningPlatform } from 'config/qsdmPlatformSupport';
 import {
   getQsdmMinerSiblingConflictMessage,
   getQsdmMinerSiblingTaskId,
@@ -37,7 +38,9 @@ import {
   describeQsdmMinerUnbondWindow,
   enrollQsdmMiner,
   getQsdmMinerEnrollmentStatus,
+  isQsdmNoNvidiaGpuPc,
   prepareQsdmMinerV2Config,
+  QSDM_NO_NVIDIA_GPU_MESSAGE,
 } from 'main/services/qsdmMinerEnrollment';
 import {
   buildQsdmPoolJoinDetail,
@@ -230,6 +233,14 @@ const startTask = async (
 
   if (isQsdmNativeTaskRuntime && isSystemMinerTask) {
     try {
+      // A PC without an NVIDIA GPU cannot mine: say so plainly before any
+      // wallet or enrollment step (macOS keeps its own message).
+      if (
+        isQsdmMiningPlatform(process.platform) &&
+        (await isQsdmNoNvidiaGpuPc())
+      ) {
+        throw new Error(QSDM_NO_NVIDIA_GPU_MESSAGE);
+      }
       // Public mining only accepts proofs signed by the enrollment owner's
       // wallet. Ask for an unlocked wallet before any enrollment prompt.
       assertQsdmMinerOperatorSigningReady();

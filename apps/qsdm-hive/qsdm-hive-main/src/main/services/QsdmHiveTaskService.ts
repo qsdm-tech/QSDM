@@ -47,6 +47,7 @@ import {
   buildQsdmTaskReadUrls,
   QSDM_TASK_RUNTIME_MODE,
 } from '../../config/qsdm';
+import { isQsdmMiningPlatform } from '../../config/qsdmPlatformSupport';
 import {
   QSDM_EDGE_WORKER_GPU_SYSTEM_TASK_ID,
   QSDM_EDGE_WORKER_RAM_SYSTEM_TASK_ID,
@@ -1164,20 +1165,28 @@ export class QsdmHiveTaskService {
       return true;
     }
 
-    try {
-      await assertQsdmMinerEnrollmentReady();
-    } catch (error) {
-      console.warn(
-        'QSDM miner process is not backed by an active enrollment for this signer and GPU.',
-        error
-      );
+    // Restoring the miner only adopts a miner process that is still running.
+    // Without one (macOS, a PC without an NVIDIA GPU, a stopped miner) there
+    // is nothing to check, and no enrollment lookup is sent.
+    if (!isQsdmMiningPlatform(process.platform)) {
       return false;
     }
-
     const processInfo = await getQsdmMinerSystemProcessInfo();
     if (!processInfo) {
       return false;
     }
+
+    try {
+      await assertQsdmMinerEnrollmentReady();
+    } catch (error: any) {
+      console.warn(
+        `QSDM Miner process ${processInfo.pid} was not adopted: ${
+          error?.message || error
+        }`
+      );
+      return false;
+    }
+
     await stopExtraQsdmMinerSystemProcesses(processInfo.pid);
 
     const { child, secret } = adoptQsdmMinerSystemProcess(processInfo);

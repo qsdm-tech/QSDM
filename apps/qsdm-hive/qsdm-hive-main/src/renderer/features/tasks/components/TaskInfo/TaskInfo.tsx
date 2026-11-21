@@ -621,6 +621,10 @@ export function TaskInfo({
         staleTime: isMinerTask ? 5000 : Infinity,
       }
     );
+  // No NVIDIA GPU on this PC: no enrollment, bond or CUDA text applies.
+  const noNvidiaGpu =
+    !isLoadingMinerRewardStatus &&
+    Boolean(minerRewardStatus?.enrollment?.noNvidiaGpu);
   const {
     mutate: alignMinerRewardAddress,
     isLoading: isAligningMinerRewardAddress,
@@ -757,6 +761,8 @@ export function TaskInfo({
             <MinerStat label="NVIDIA eligibility">
               {isLoadingMinerRewardStatus
                 ? 'checking...'
+                : noNvidiaGpu
+                ? 'No NVIDIA GPU'
                 : minerRewardStatus?.enrollment?.eligible
                 ? `${
                     minerRewardStatus.enrollment.gpu?.name || 'Eligible GPU'
@@ -768,6 +774,8 @@ export function TaskInfo({
             <MinerStat label="Compute backend">
               {isLoadingMinerRewardStatus
                 ? 'checking...'
+                : noNvidiaGpu
+                ? 'Not available'
                 : minerRewardStatus?.enrollment?.computeBackend === 'cuda'
                 ? minerRewardStatus.enrollment.gpuComputeActive
                   ? 'NVIDIA CUDA active'
@@ -782,7 +790,9 @@ export function TaskInfo({
                 : 'Inactive'}
             </MinerStat>
             <MinerStat label="Protocol enrollment" valueClassName="font-mono">
-              {minerRewardStatus?.enrollment?.ready
+              {noNvidiaGpu
+                ? 'Needs an NVIDIA GPU'
+                : minerRewardStatus?.enrollment?.ready
                 ? minerRewardStatus.enrollment.bondMode === 'mining_rewards' &&
                   !minerRewardStatus.enrollment.fullyBonded
                   ? `Building from rewards: ${formatCell(
@@ -833,6 +843,7 @@ export function TaskInfo({
               </MinerNotice>
             )}
           {!isLoadingMinerRewardStatus &&
+            !noNvidiaGpu &&
             minerRewardStatus?.enrollment?.computeBackend === 'cuda' &&
             !minerRewardStatus.enrollment.gpuComputeActive && (
               <MinerNotice>
@@ -865,11 +876,13 @@ export function TaskInfo({
               Miner reward lookup failed: {minerRewardStatus.error}
             </MinerNotice>
           )}
-          {minerRewardStatus?.enrollment?.error && (
-            <MinerNotice>
-              Enrollment: {minerRewardStatus.enrollment.error}
-            </MinerNotice>
-          )}
+          {minerRewardStatus?.enrollment?.error &&
+            !(noNvidiaGpu && miningUnsupported) && (
+              <MinerNotice>
+                {noNvidiaGpu ? '' : 'Enrollment: '}
+                {minerRewardStatus.enrollment.error}
+              </MinerNotice>
+            )}
         </div>
       )}
 

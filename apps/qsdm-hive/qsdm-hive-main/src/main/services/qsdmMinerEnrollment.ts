@@ -168,8 +168,29 @@ export type QsdmMinerEnrollmentStatus = {
   gpuComputeActive?: boolean;
   tensorCoreForkActive?: boolean;
   tensorCoreForkHeight?: number;
+  // This PC has no NVIDIA GPU (QSDM_NO_NVIDIA_GPU_MESSAGE), so it cannot mine.
+  noNvidiaGpu?: boolean;
   error?: string;
 };
+
+export const QSDM_NO_NVIDIA_GPU_MESSAGE =
+  'This PC has no NVIDIA GPU. QSDM mining needs one.';
+
+export const isQsdmNoNvidiaGpuError = (error: unknown) =>
+  (error as { message?: unknown } | null | undefined)?.message ===
+  QSDM_NO_NVIDIA_GPU_MESSAGE;
+
+// nvidia-smi comes with the NVIDIA driver. Missing (ENOENT), or listing no
+// GPU, means this PC has no NVIDIA GPU. A driver that fails ("couldn't
+// communicate with the NVIDIA driver") is not this case: it keeps its own
+// message, as does a GPU older than Turing.
+export const isQsdmNoNvidiaGpuProbeResult = (
+  error: { code?: unknown } | null | undefined,
+  output: string
+) =>
+  error?.code === 'ENOENT' ||
+  /no devices were found/i.test(output) ||
+  (!error && !output.trim());
 
 const execFileText = (command: string, args: string[], timeout = 7000) =>
   new Promise<string>((resolve, reject) => {
@@ -177,9 +198,15 @@ const execFileText = (command: string, args: string[], timeout = 7000) =>
       command,
       args,
       { windowsHide: true, timeout, maxBuffer: 1024 * 1024 },
-      (error, stdout) => {
+      (error, stdout, stderr) => {
         if (error) {
-          reject(error);
+          // Keep what the program printed: nvidia-smi reports "No devices
+          // were found" in its output with a failing exit code.
+          reject(
+            Object.assign(error, {
+              output: `${String(stdout || '')}\n${String(stderr || '')}`,
+            })
+          );
           return;
         }
         resolve(stdout.trim());
@@ -249,16 +276,31 @@ export const detectQsdmNvidiaGPU = async (): Promise<QsdmNvidiaGPU> => {
       '--format=csv,noheader,nounits',
     ]);
   } catch (error: any) {
+    if (isQsdmNoNvidiaGpuProbeResult(error, String(error?.output || '')))
+      throw new Error(QSDM_NO_NVIDIA_GPU_MESSAGE);
     throw new Error(
       `NVIDIA GPU detection failed. Install a current NVIDIA driver and confirm nvidia-smi works. ${
         error?.message || error
       }`
     );
   }
+  if (isQsdmNoNvidiaGpuProbeResult(null, output))
+    throw new Error(QSDM_NO_NVIDIA_GPU_MESSAGE);
 
   const value = parseQsdmNvidiaSmiCsv(output, await readCudaVersion());
   cachedGPU = { value, expiresAt: Date.now() + 30_000 };
   return value;
+};
+
+// True only when this PC has no NVIDIA GPU at all. Any other detection
+// problem returns false, so starting the miner reports that problem instead.
+export const isQsdmNoNvidiaGpuPc = async () => {
+  try {
+    await detectQsdmNvidiaGPU();
+    return false;
+  } catch (error) {
+    return isQsdmNoNvidiaGpuError(error);
+  }
 };
 
 const getMinerConfigPath = () =>
@@ -592,6 +634,7 @@ export const getQsdmMinerEnrollmentStatus =
         requiredStakeDust: 0,
         requiredStakeCell: 0,
         deferredBondAvailable: false,
+        noNvidiaGpu: isQsdmNoNvidiaGpuError(error),
         error: error?.message || String(error),
       };
     }

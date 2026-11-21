@@ -327,6 +327,8 @@ export interface QsdmMinerRewardStatusResponse {
     gpuComputeActive?: boolean;
     tensorCoreForkActive?: boolean;
     tensorCoreForkHeight?: number;
+    /** This PC has no NVIDIA GPU, so it cannot mine. */
+    noNvidiaGpu?: boolean;
     error?: string;
     gpu?: {
       uuid: string;
