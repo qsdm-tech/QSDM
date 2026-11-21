@@ -127,6 +127,12 @@ export const isQsdmMinerSystemTaskId = (taskId?: string | null) =>
   taskId === QSDM_MINER_SYSTEM_TASK_METADATA_ID ||
   isQsdmPoolMinerSystemTaskId(taskId);
 
+// The miner tasks keep no task state on the chain: Hive never sends a signed
+// "start" action for them, so a signed "stop" would only use up a nonce of the
+// wallet. Every other task keeps its signed start and stop actions.
+export const qsdmTaskSendsSignedStopAction = (taskId?: string | null) =>
+  !isQsdmMinerSystemTaskId(taskId);
+
 // The other miner task on this GPU: only one of the two may run at a time.
 export const getQsdmMinerSiblingTaskId = (taskId?: string | null) =>
   isQsdmPoolMinerSystemTaskId(taskId)

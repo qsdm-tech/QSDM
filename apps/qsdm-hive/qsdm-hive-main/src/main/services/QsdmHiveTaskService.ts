@@ -55,6 +55,7 @@ import {
   isQsdmHiveInternalTaskId,
   QSDM_MINER_SYSTEM_TASK_ID,
   QSDM_MOTHER_HIVE_SYSTEM_TASK_ID,
+  qsdmTaskSendsSignedStopAction,
 } from '../../config/qsdmSystemTasks';
 import { SystemDbKeys } from '../../config/systemDbKeys';
 import { getAppDataPath } from '../node/helpers/getAppDataPath';
@@ -1283,7 +1284,10 @@ export class QsdmHiveTaskService {
         if (!skipRemoveFromRunningTasks) {
           await this.removeRunningTaskPubKey(taskAccountPubKey);
         }
-        if (QSDM_TASK_RUNTIME_MODE === 'qsdm-native') {
+        if (
+          QSDM_TASK_RUNTIME_MODE === 'qsdm-native' &&
+          qsdmTaskSendsSignedStopAction(taskAccountPubKey)
+        ) {
           try {
             await submitQsdmTaskActionIntent({
               taskId: taskAccountPubKey,
@@ -1428,7 +1432,10 @@ export class QsdmHiveTaskService {
       await this.removeRunningTaskPubKey(taskAccountPubKey);
     }
 
-    if (QSDM_TASK_RUNTIME_MODE === 'qsdm-native') {
+    if (
+      QSDM_TASK_RUNTIME_MODE === 'qsdm-native' &&
+      qsdmTaskSendsSignedStopAction(taskAccountPubKey)
+    ) {
       try {
         await submitQsdmTaskActionIntent({
           taskId: taskAccountPubKey,

@@ -26,6 +26,7 @@ import {
   getQsdmMinerSiblingTaskId,
   isQsdmPoolMinerSystemTaskId,
   QSDM_POOL_MINER_SYSTEM_TASK_ID,
+  qsdmTaskSendsSignedStopAction,
 } from 'config/qsdmSystemTasks';
 import getUserConfig from 'main/controllers/getUserConfig';
 import db from 'main/db';
@@ -515,6 +516,7 @@ const startTask = async (
     console.error('ERROR STARTING TASK', err);
     if (
       isQsdmNativeTaskRuntime &&
+      qsdmTaskSendsSignedStopAction(taskAccountPubKey) &&
       (qsdmStartActionAccepted || (isSystemTask && isTaskRunning))
     ) {
       try {
