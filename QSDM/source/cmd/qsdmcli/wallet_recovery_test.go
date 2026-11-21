@@ -182,56 +182,7 @@ func TestLegacyWalletRecoveryMigrationAndRestorePreserveAddress(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var (
-		mu         sync.Mutex
-		registered *chain.RecoveryCapsuleAction
-	)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/api/v1/wallet/recovery/nonce":
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"action_nonce": uint64(0), "present": true,
-			})
-		case r.URL.Path == "/api/v1/wallet/recovery/capsules/submit-signed":
-			var envelope legacyRecoveryEnvelope
-			if err := json.NewDecoder(r.Body).Decode(&envelope); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-			payload, _ := json.Marshal(envelope.Action)
-			tx := &mempool.Tx{
-				ID: envelope.Action.ID, Sender: envelope.Action.Sender,
-				Nonce: envelope.Action.Nonce, Payload: payload,
-				ContractID: chain.RecoveryCapsuleContractID,
-				Signature:  envelope.Signature, PublicKey: envelope.PublicKey,
-			}
-			if err := chain.VerifyRecoveryCapsuleTx(tx); err != nil {
-				http.Error(w, err.Error(), http.StatusUnprocessableEntity)
-				return
-			}
-			copyAction := envelope.Action
-			mu.Lock()
-			registered = &copyAction
-			mu.Unlock()
-			_ = json.NewEncoder(w).Encode(map[string]string{"status": "accepted"})
-		case strings.HasPrefix(r.URL.Path, "/api/v1/wallet/recovery/capsules/"):
-			mu.Lock()
-			action := registered
-			mu.Unlock()
-			if action == nil || !strings.HasSuffix(r.URL.Path, action.Locator) {
-				http.Error(w, "not found", http.StatusNotFound)
-				return
-			}
-			_ = json.NewEncoder(w).Encode(legacyRecoveryCapsuleResponse{State: chain.RecoveryCapsuleState{
-				Owner: action.Sender, Locator: action.Locator, Capsule: action.Capsule,
-				ActionID: action.ID, RegisteredAt: action.Timestamp,
-			}})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-
+	server := newLegacyRecoveryServer(t)
 	cli := &CLI{baseURL: server.URL + "/api/v1", client: server.Client()}
 	if err := cli.walletNew([]string{
 		"--out", walletPath,
@@ -293,6 +244,62 @@ func TestLegacyWalletRecoveryMigrationAndRestorePreserveAddress(t *testing.T) {
 	if restored.Address != before.Address || restored.PublicKey != before.PublicKey {
 		t.Fatalf("restored legacy identity changed: got %s want %s", restored.Address, before.Address)
 	}
+}
+
+// newLegacyRecoveryServer stands in for QSDM Core's recovery endpoints: it
+// accepts a correctly signed capsule registration, then serves that capsule.
+func newLegacyRecoveryServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	var (
+		mu         sync.Mutex
+		registered *chain.RecoveryCapsuleAction
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/v1/wallet/recovery/nonce":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"action_nonce": uint64(0), "present": true,
+			})
+		case r.URL.Path == "/api/v1/wallet/recovery/capsules/submit-signed":
+			var envelope legacyRecoveryEnvelope
+			if err := json.NewDecoder(r.Body).Decode(&envelope); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			payload, _ := json.Marshal(envelope.Action)
+			tx := &mempool.Tx{
+				ID: envelope.Action.ID, Sender: envelope.Action.Sender,
+				Nonce: envelope.Action.Nonce, Payload: payload,
+				ContractID: chain.RecoveryCapsuleContractID,
+				Signature:  envelope.Signature, PublicKey: envelope.PublicKey,
+			}
+			if err := chain.VerifyRecoveryCapsuleTx(tx); err != nil {
+				http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+				return
+			}
+			copyAction := envelope.Action
+			mu.Lock()
+			registered = &copyAction
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "accepted"})
+		case strings.HasPrefix(r.URL.Path, "/api/v1/wallet/recovery/capsules/"):
+			mu.Lock()
+			action := registered
+			mu.Unlock()
+			if action == nil || !strings.HasSuffix(r.URL.Path, action.Locator) {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(legacyRecoveryCapsuleResponse{State: chain.RecoveryCapsuleState{
+				Owner: action.Sender, Locator: action.Locator, Capsule: action.Capsule,
+				ActionID: action.ID, RegisteredAt: action.Timestamp,
+			}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	return server
 }
 
 func TestLegacyWalletRecoveryRejectsUnexpectedAddressBeforeMutation(t *testing.T) {
