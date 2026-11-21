@@ -1723,9 +1723,18 @@ export class QsdmHiveTaskService {
         return { upgradeableTaskIds: [] };
       }
 
-      const results = await Promise.allSettled(
-        startedTasksPubKeys.map((pubkey) => this.getQsdmNativeTaskState(pubkey))
-      );
+      // One task after another: at launch and on every catalog refresh this
+      // sent one request per started task at the same moment, a burst against
+      // the API's per-IP limit.
+      const results = await startedTasksPubKeys.reduce<
+        Promise<PromiseSettledResult<RawTaskData>[]>
+      >(async (previous, pubkey) => {
+        const settled = await previous;
+        const [result] = await Promise.allSettled([
+          this.getQsdmNativeTaskState(pubkey),
+        ]);
+        return [...settled, result];
+      }, Promise.resolve([]));
 
       this.startedTasksData = results
         .filter(
