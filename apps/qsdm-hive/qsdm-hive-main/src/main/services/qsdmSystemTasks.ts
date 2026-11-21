@@ -3640,7 +3640,7 @@ export const adoptQsdmMinerSystemProcess = (
   };
 };
 
-const waitForPidExit = async (pid: number, timeoutMs = 10000) => {
+export const waitForPidExit = async (pid: number, timeoutMs = 10000) => {
   const deadline = Date.now() + timeoutMs;
   while (isPidAlive(pid) && Date.now() < deadline) {
     await new Promise((resolve) => {

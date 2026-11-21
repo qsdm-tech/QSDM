@@ -65,6 +65,7 @@ import { submitQsdmTaskActionIntent } from './qsdmTaskActions';
 import { getQsdmTaskActionSender } from './qsdmTaskActionSigner';
 import { qsdmGetFirstJson } from './qsdmHttpRead';
 import { assertQsdmMinerEnrollmentReady } from './qsdmMinerEnrollment';
+import { startQsdmMinerEnrollmentWatch } from './qsdmMinerEnrollmentWatch';
 import {
   getQsdmTaskStakeOwnership,
   normalizeQsdmNativeCellAmountMapToDenomination,
@@ -729,6 +730,16 @@ export class QsdmHiveTaskService {
     await this.addRunningTaskPubKey(taskAccountPubKey);
 
     if (QSDM_TASK_RUNTIME_MODE === 'qsdm-native') {
+      if (isQsdmMinerSystemTask(taskAccountPubKey)) {
+        // Started or adopted alike: notice when the chain removes the
+        // enrollment while this miner runs, and enroll again.
+        startQsdmMinerEnrollmentWatch(
+          taskAccountPubKey,
+          childTaskProcess,
+          () =>
+            this.RUNNING_TASKS[taskAccountPubKey]?.child === childTaskProcess
+        );
+      }
       if (taskInfo) {
         this.upsertStartedTaskData(taskAccountPubKey, taskInfo);
       }

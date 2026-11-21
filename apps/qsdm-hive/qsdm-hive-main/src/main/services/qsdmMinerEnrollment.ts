@@ -14,6 +14,8 @@ import {
   QSDM_CORE_CELL_DECIMALS,
   QSDM_GATEWAY_API_URL,
 } from 'config/qsdm';
+import { QSDM_MINER_SYSTEM_TASK_ID } from 'config/qsdmSystemTasks';
+import { getAppDataPath } from 'main/node/helpers/getAppDataPath';
 import { assertQsdmCanonicalChainSafety } from 'main/services/qsdmCanonicalChain';
 import {
   setQsdmMinerConfigStringValue,
@@ -613,6 +615,75 @@ const fetchEnrollment = async (nodeId: string) => {
   }
 };
 
+// The enrollment record of a NodeID, or undefined when the chain has none
+// (HTTP 404). Any other failure throws.
+export const fetchQsdmMinerEnrollmentRecord = (nodeId: string) =>
+  fetchEnrollment(nodeId);
+
+// The NodeID in miner.toml, when Hive's v2 miner settings are complete.
+export const getQsdmMinerConfiguredNodeId = () =>
+  readConfiguredIdentity()?.nodeId;
+
+export type QsdmMinerBondMode = 'upfront' | 'mining_rewards';
+
+// How the user chose to bond each wallet's miner NodeID ("Use mining
+// earnings" or "Lock CELL now"), so Hive can enroll again the same way after
+// the chain removed the enrollment. Holds wallet addresses, NodeIDs and modes
+// only, never a secret.
+type QsdmMinerBondChoices = {
+  schema: 'qsdm.hive-miner-bond-choice.v1';
+  choices: Record<string, QsdmMinerBondMode>;
+};
+
+const getQsdmMinerBondChoicePath = () =>
+  path.join(
+    getAppDataPath(),
+    'namespace',
+    QSDM_MINER_SYSTEM_TASK_ID,
+    'miner-bond-choice.json'
+  );
+
+const bondChoiceKey = (owner: string, nodeId: string) =>
+  `${owner.toLowerCase()}:${nodeId}`;
+
+const readQsdmMinerBondChoices = (): QsdmMinerBondChoices['choices'] => {
+  try {
+    const file = JSON.parse(
+      fs.readFileSync(getQsdmMinerBondChoicePath(), 'utf8')
+    ) as Partial<QsdmMinerBondChoices>;
+    return file.schema === 'qsdm.hive-miner-bond-choice.v1' && file.choices
+      ? file.choices
+      : {};
+  } catch {
+    return {};
+  }
+};
+
+export const readQsdmMinerBondChoice = (
+  owner: string,
+  nodeId: string
+): QsdmMinerBondMode | undefined => {
+  const mode = readQsdmMinerBondChoices()[bondChoiceKey(owner, nodeId)];
+  return mode === 'upfront' || mode === 'mining_rewards' ? mode : undefined;
+};
+
+export const rememberQsdmMinerBondChoice = (
+  owner: string,
+  nodeId: string,
+  bondMode: QsdmMinerBondMode
+) => {
+  const choices = readQsdmMinerBondChoices();
+  const key = bondChoiceKey(owner, nodeId);
+  if (choices[key] === bondMode) return;
+  const filePath = getQsdmMinerBondChoicePath();
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const file: QsdmMinerBondChoices = {
+    schema: 'qsdm.hive-miner-bond-choice.v1',
+    choices: { ...choices, [key]: bondMode },
+  };
+  fs.writeFileSync(filePath, `${JSON.stringify(file, null, 2)}\n`, 'utf8');
+};
+
 export const getQsdmMinerEnrollmentStatus =
   async (): Promise<QsdmMinerEnrollmentStatus> => {
     const signerAddress = getQsdmTaskActionSender();
@@ -914,7 +985,20 @@ export const enrollQsdmMiner = async (
   while (Date.now() < deadline) {
     await delay(2_000);
     const current = await getQsdmMinerEnrollmentStatus();
-    if (current.ready) return current;
+    if (current.ready) {
+      if (current.signerAddress && current.nodeId) {
+        try {
+          rememberQsdmMinerBondChoice(
+            current.signerAddress,
+            current.nodeId,
+            bondMode
+          );
+        } catch {
+          // Only a convenience for enrolling again later; never fail here.
+        }
+      }
+      return current;
+    }
   }
   throw new Error(
     'Signed enrollment was submitted but was not confirmed within 120 seconds. Check Core connectivity and retry.'

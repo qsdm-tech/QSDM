@@ -42,6 +42,7 @@ import {
   prepareQsdmMinerV2Config,
   QSDM_NO_NVIDIA_GPU_MESSAGE,
 } from 'main/services/qsdmMinerEnrollment';
+import { setQsdmMinerTaskControls } from 'main/services/qsdmMinerEnrollmentWatch';
 import {
   buildQsdmPoolJoinDetail,
   planQsdmPoolMinerStart,
@@ -64,6 +65,7 @@ import {
   startQsdmMotherHiveSystemProcess,
   startQsdmSkyFangLinkSystemProcess,
   startOrAdoptQsdmMinerSystemProcess,
+  waitForPidExit,
   writeQsdmSystemTaskLog,
 } from 'main/services/qsdmSystemTasks';
 import { getQsdmTaskStakeOwnership } from 'main/services/qsdmTaskStake';
@@ -534,6 +536,24 @@ const startTask = async (
     });
   }
 };
+
+// The miner enrollment watch stops a miner task, or restarts it after it
+// enrolled again, through the same start path as the Start button. The old
+// miner process must be gone first, or the start would adopt it. A task the
+// user stopped meanwhile stays stopped.
+setQsdmMinerTaskControls({
+  stop: async (taskId) => {
+    if (!qsdmHiveTasks.RUNNING_TASKS[taskId]) return;
+    await qsdmHiveTasks.stopTask(taskId);
+  },
+  restart: async (taskId) => {
+    const runtime = qsdmHiveTasks.RUNNING_TASKS[taskId];
+    if (!runtime) return;
+    await qsdmHiveTasks.stopTask(taskId);
+    if (runtime.child.pid) await waitForPidExit(runtime.child.pid);
+    await startTask({} as Event, { taskAccountPubKey: taskId });
+  },
+});
 
 export async function clearTaskRetryTimeout(taskPubkey: string) {
   const allTaskRetryData: {
