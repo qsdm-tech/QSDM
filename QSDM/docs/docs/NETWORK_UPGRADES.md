@@ -18,6 +18,7 @@ upgrades harden that pilot network; they do not change its stage. See
 
 | Date (UTC) | Height | Upgrade | Do you need to act? |
 |---|---|---|---|
+| 2026-11-22 | Hive release | QSDM Hive 1.4.26 | No (Hive 1.4.21 and newer update themselves; 1.4.20 / 1.4.17 install by hand) |
 | 2026-11-19 | Hive release | QSDM Hive 1.4.25 | No (Hive 1.4.21 and newer update themselves; 1.4.20 / 1.4.17 install by hand) |
 | 2026-11-18 | Hive release | QSDM Hive 1.4.24 | No (Hive 1.4.21 and newer update themselves; 1.4.20 / 1.4.17 install by hand) |
 | About 2026-11-26 (scheduled) | 1,210,000 | Network-funded rewards: the block reward becomes 4.56 CELL, and each reward is split 85 % miner, 8 % Operations, 5 % Play Rewards, 2 % Security ([Genesis Policy v1.2](GENESIS_POLICY_v1.2.md), [Consensus rules](CONSENSUS_RULES.md#network-funded-rewards-from-block-1210000)) | **Yes**, full-node operators: run the next full-node release before this height |
@@ -59,9 +60,25 @@ upgrades harden that pilot network; they do not change its stage. See
 | 2026-10-10 | Hive release | QSDM Hive 1.4.22 | **Yes**, Hive 1.4.20 / 1.4.17 users install by hand |
 | Before October 2026 | 625,000 | Signed task actions and transaction content root | No |
 
+## 2026-11-22: QSDM Hive 1.4.26
+
+- **What changed:** Hive 1.4.26 for Windows x64 and Linux x86-64 is the current
+  release. Settings > Wallet shows Recent transactions for the active wallet, and a
+  wallet switch never shows or sends with the previous wallet. The task list has a
+  QSDM Bug Bounty row. Mining: the miner reads a `miner.toml` with CR line endings,
+  Hive shows the miner's real startup error, a PC without an NVIDIA GPU does not
+  mine, and Hive enrolls the miner again with your saved choice when the chain
+  removes its enrollment. A Restart to update banner replaces the forced update
+  window. `qsdmcli` and the miner are rebuilt; the wallet host and Edge Control
+  1.3.7 are the same files as in Hive 1.4.25.
+- **What you must do:** nothing on Hive 1.4.21 or 1.4.25: the update arrives in
+  Hive; restart Hive when it asks. Hive 1.4.20 (Windows) and 1.4.17 (Linux)
+  cannot update themselves: install 1.4.26 by hand. Check the download first:
+  [Downloads & verification](DOWNLOADS_AND_VERIFICATION.md).
+
 ## 2026-11-19: QSDM Hive 1.4.25
 
-- **What changed:** Hive 1.4.25 for Windows x64 and Linux x86-64 is the current
+- **What changed:** Hive 1.4.25 for Windows x64 and Linux x86-64 became the current
   release. It keeps several wallets: Create, Import and Restore with 24 Words add
   a wallet and never replace one (Settings > Wallet > Wallets: use, rename, remove);
   a wallet that Hive 1.4.24 replaced on import comes back under Recovered wallets.
