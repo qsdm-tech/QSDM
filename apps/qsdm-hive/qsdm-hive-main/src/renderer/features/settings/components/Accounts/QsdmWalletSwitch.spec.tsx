@@ -64,6 +64,7 @@ jest.mock('renderer/services', () => ({
   forgetQsdmWallet: jest.fn(),
   getQsdmCellAccount: jest.fn(),
   getQsdmCoreStatus: jest.fn(),
+  getQsdmWalletHistory: jest.fn(),
   getQsdmWalletProviderPermissions: jest.fn(),
   importQsdmSignerWallet: jest.fn(),
   listQsdmWallets: jest.fn(),
@@ -102,6 +103,8 @@ const backend = {
   recoverable: [] as Array<Record<string, unknown>>,
   balances: { [A]: 500, [B]: 7, [C]: 12 } as Record<string, number>,
   nextNonces: { [A]: 41, [B]: 3, [C]: 1 } as Record<string, number>,
+  // Each wallet's last send, as Recent transactions lists it.
+  lastSend: { [A]: 25, [B]: 0.75, [C]: 1 } as Record<string, number>,
   accountGate: undefined as Promise<void> | undefined,
   walletChangedListeners: [] as Array<
     (event: unknown, payload: { address: string }) => void
@@ -172,6 +175,27 @@ const installBackend = () => {
   mocked.getQsdmWalletProviderPermissions.mockResolvedValue({
     permissions: [],
   });
+  mocked.getQsdmWalletHistory.mockImplementation(
+    async ({ address, kind }: { address: string; kind: string }) => ({
+      address,
+      kind,
+      available: false,
+      items: [],
+      nextBefore: null,
+      localSends: [
+        {
+          txId: `tx-${address.slice(0, 4)}`,
+          time: '2026-11-22T10:00:00.000Z',
+          type: 'sent',
+          counterparty: RECIPIENT,
+          amount: backend.lastSend[address],
+          outgoing: true,
+          status: 'confirmed',
+          source: 'local',
+        },
+      ],
+    })
+  );
   mocked.activateQsdmWallet.mockImplementation(
     async ({ address }: { address: string }) => {
       // Hive's main process switches, then tells every window.
@@ -283,12 +307,13 @@ describe('QSDM wallet switch in Settings > Wallet', () => {
     rendered = undefined;
   });
 
-  it("switch A -> B: shows B's balance and nonce and never A's numbers under B", async () => {
+  it("switch A -> B: shows B's balance, nonce and history and never A's numbers under B", async () => {
     rendered = renderWalletSettings();
     await waitFor(() =>
       expect(within(balanceCard()).getByText('500.000')).toBeInTheDocument()
     );
     expect(screen.getByText(panelAddress(A))).toBeInTheDocument();
+    expect(await screen.findByText('−25 CELL')).toBeInTheDocument();
 
     const release = holdAccountReads();
     await switchTo('Wallet 2');
@@ -296,6 +321,7 @@ describe('QSDM wallet switch in Settings > Wallet', () => {
     // B is active now; while B's account is still loading nothing of A may be shown.
     expect(screen.queryByText('500.000')).not.toBeInTheDocument();
     expect(screen.queryByText(panelAddress(A))).not.toBeInTheDocument();
+    expect(screen.queryByText('−25 CELL')).not.toBeInTheDocument();
 
     await act(async () => {
       release();
@@ -305,7 +331,12 @@ describe('QSDM wallet switch in Settings > Wallet', () => {
     );
     expect(screen.getByText(panelAddress(B))).toBeInTheDocument();
     expect(within(nonceCard()).getByText('3')).toBeInTheDocument();
+    expect(await screen.findByText('−0.75 CELL')).toBeInTheDocument();
     expect(screen.queryByText('500.000')).not.toBeInTheDocument();
+    expect(screen.queryByText('−25 CELL')).not.toBeInTheDocument();
+    expect(
+      mocked.getQsdmWalletHistory.mock.calls.map(([request]) => request.address)
+    ).not.toContain(undefined);
   });
 
   it('a switch made elsewhere (adding a wallet with "Switch to the new wallet now") drops the previous wallet too', async () => {

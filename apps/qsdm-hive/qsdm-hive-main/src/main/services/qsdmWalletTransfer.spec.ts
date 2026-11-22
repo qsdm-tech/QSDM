@@ -8,6 +8,7 @@ import { setQsdmRuntimeCoreApiUrl } from 'config/qsdm';
 
 import { assertQsdmCanonicalChainSafety } from './qsdmCanonicalChain';
 import { fetchQsdmPoEParents } from './qsdmPoEParents';
+import { recordQsdmWalletSend } from './qsdmWalletHistory';
 import { submitQsdmWalletTransferIntent } from './qsdmWalletTransfer';
 
 jest.mock('axios', () => ({
@@ -27,6 +28,10 @@ jest.mock('./qsdmCanonicalChain', () => ({
 jest.mock('./qsdmPoEParents', () => ({
   ...jest.requireActual('./qsdmPoEParents'),
   fetchQsdmPoEParents: jest.fn(),
+}));
+
+jest.mock('./qsdmWalletHistory', () => ({
+  recordQsdmWalletSend: jest.fn(),
 }));
 
 const mockedAxiosGet = axios.get as jest.Mock;
@@ -566,6 +571,38 @@ describe('qsdmWalletTransfer after a wallet switch', () => {
     ).rejects.toThrow(changedMessage);
     expect(mockedSpawn).not.toHaveBeenCalled();
     expect(mockedAxiosPost).not.toHaveBeenCalled();
+  });
+
+  it("keeps the accepted send in the sending wallet's Recent transactions", async () => {
+    const record = recordQsdmWalletSend as jest.Mock;
+    record.mockReset();
+    mockCliSigner();
+    mockedAxiosGet.mockImplementation(async (url: string) => nonceFor(url));
+    mockedAxiosPost.mockResolvedValue(acceptedResponse('tx-from-b'));
+
+    makeActive(walletB);
+    await submitQsdmWalletTransferIntent({
+      recipient,
+      amount: 2.5,
+      expectedSender: walletB,
+    } as TransferRequest);
+    expect(record).toHaveBeenCalledTimes(1);
+    expect(record).toHaveBeenCalledWith(walletB, {
+      txId: 'tx-from-b',
+      to: recipient,
+      amount: 2.5,
+      fee: 0,
+      time: expect.any(String),
+    });
+
+    // A send whose record cannot be written is still sent.
+    record.mockImplementationOnce(() => {
+      throw new Error('disk full');
+    });
+    await expect(
+      submitQsdmWalletTransferIntent({ recipient, amount: 1 })
+    ).resolves.toMatchObject({ status: 'accepted' });
+    expect(mockedAxiosPost).toHaveBeenCalledTimes(2);
   });
 
   it('reports a send as in progress until it settles', async () => {

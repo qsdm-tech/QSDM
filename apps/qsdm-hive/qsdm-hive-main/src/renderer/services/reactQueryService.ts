@@ -26,6 +26,7 @@ export enum QueryKeys {
   QsdmCoreStatus = 'QsdmCoreStatus',
   QsdmCellAccount = 'QsdmCellAccount',
   QsdmWalletList = 'QsdmWalletList',
+  QsdmWalletHistory = 'QsdmWalletHistory',
   QsdmMinerRewardStatus = 'QsdmMinerRewardStatus',
   QsdmPulsePool = 'QsdmPulsePool',
   QsdmBountyLedger = 'QsdmBountyLedger',

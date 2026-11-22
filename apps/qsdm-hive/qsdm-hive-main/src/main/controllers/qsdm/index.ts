@@ -18,6 +18,7 @@ export * from './importQsdmSignerWallet';
 export * from './restoreQsdmSignerWallet';
 export * from './unlockQsdmSignerWallet';
 export * from './qsdmWallets';
+export * from './getQsdmWalletHistory';
 export * from './qsdmWalletProviderPermissions';
 export * from './linkQsdmSkyFangAccount';
 export * from './manageQsdmTaskCatalog';

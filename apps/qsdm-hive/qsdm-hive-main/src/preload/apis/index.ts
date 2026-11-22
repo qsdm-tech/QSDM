@@ -66,6 +66,7 @@ import {
   getQsdmReferralStatus,
 } from './getQsdmReferralStatus';
 import getQsdmSkyFangLinkStatus from './getQsdmSkyFangLinkStatus';
+import getQsdmWalletHistory from './getQsdmWalletHistory';
 import getQsdmWalletProviderPermissions from './getQsdmWalletProviderPermissions';
 import getRentAmount from './getRentAmount';
 import getRetryDataByTaskId from './getRetryDataByTaskId';
@@ -241,6 +242,7 @@ export default {
   forgetQsdmWallet,
   recoverQsdmWallet,
   onQsdmWalletChanged,
+  getQsdmWalletHistory,
   restoreQsdmSignerWallet,
   unlockQsdmSignerWallet,
   getQsdmWalletProviderPermissions,

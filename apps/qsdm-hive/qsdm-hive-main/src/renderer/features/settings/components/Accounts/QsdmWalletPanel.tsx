@@ -30,6 +30,7 @@ import {
 } from 'renderer/services';
 import { isValidWalletAddress } from 'renderer/utils';
 
+import { QsdmWalletHistory } from './QsdmWalletHistory';
 import { QsdmWalletList } from './QsdmWalletList';
 
 const formatAddress = (address?: string) => {
@@ -261,6 +262,8 @@ export function QsdmWalletPanel() {
         toast.success(messageWithTxId);
         setRecipient('');
         setAmount('');
+        // The send shows in Recent transactions right away, as Pending.
+        refreshHistory();
         await queryClient.invalidateQueries([QueryKeys.QsdmCellAccount]);
         await queryClient.invalidateQueries([QueryKeys.AccountBalance]);
         await queryClient.invalidateQueries([QueryKeys.MainAccountBalance]);
@@ -397,10 +400,17 @@ export function QsdmWalletPanel() {
     }
   );
 
+  const refreshHistory = () =>
+    queryClient.invalidateQueries({
+      queryKey: [QueryKeys.QsdmWalletHistory],
+      refetchPage: (_page: unknown, index: number) => index === 0,
+    });
+
   const refresh = async () => {
     await queryClient.invalidateQueries([QueryKeys.QsdmWalletList]);
     await queryClient.invalidateQueries([QueryKeys.QsdmCoreStatus]);
     await queryClient.invalidateQueries([QueryKeys.QsdmCellAccount]);
+    refreshHistory();
   };
 
   const handleRecipientChange = async (
@@ -1206,6 +1216,7 @@ export function QsdmWalletPanel() {
             'Configure the QSDM local signer before sending CELL.'}
         </div>
       )}
+      <QsdmWalletHistory address={address} />
       <div className="pt-2 text-xs text-finnieGray-secondary">
         Core (
         {coreStatus?.coreConnectionMode ||

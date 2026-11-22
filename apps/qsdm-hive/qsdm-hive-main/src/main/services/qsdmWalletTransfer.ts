@@ -22,6 +22,7 @@ import {
   getQsdmTaskActionSender,
   getQsdmTaskActionSignerMode,
 } from './qsdmTaskActionSigner';
+import { recordQsdmWalletSend } from './qsdmWalletHistory';
 
 type UnsignedQsdmWalletEnvelope = Omit<
   QsdmSignedTransactionEnvelope,
@@ -58,6 +59,29 @@ const sameWalletAddress = (left?: string, right?: string) =>
 const assertActiveWalletSender = (sender?: string) => {
   if (!sameWalletAddress(sender, getQsdmTaskActionSender())) {
     throw new Error(QSDM_ACTIVE_WALLET_CHANGED_MESSAGE);
+  }
+};
+
+// Recent transactions shows the send right away (Pending). Keeping this record never fails a send.
+const rememberWalletSend = (
+  sender: string,
+  submitted: QsdmSubmitSignedTransactionResponse | undefined,
+  { recipient, amount, fee }: { recipient: string; amount: number; fee: number }
+) => {
+  if (!submitted?.transaction_id) return;
+  try {
+    recordQsdmWalletSend(sender, {
+      txId: submitted.transaction_id,
+      to: recipient,
+      amount,
+      fee,
+      time: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.warn(
+      'Hive could not add the CELL send to Recent transactions.',
+      (error as Error)?.message
+    );
   }
 };
 
@@ -287,7 +311,9 @@ const submitQsdmWalletTransfer = async ({
   let nonce = await getNextWalletNonce(sender);
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
-      return await signAndSubmit(nonce);
+      const submitted = await signAndSubmit(nonce);
+      rememberWalletSend(sender, submitted, { recipient, amount, fee });
+      return submitted;
     } catch (error) {
       const conflict = getTransferConflict(error);
       const staleParents = isQsdmPoEParentsRejection(error);

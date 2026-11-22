@@ -3,11 +3,12 @@ import { QueryClient } from 'react-query';
 import { QueryKeys } from './reactQueryService';
 
 /**
- * Queries whose answers belong to the ACTIVE QSDM wallet: balance, nonce and signer state, stakes, rewards, miner
- * enrollment, pool, links and referrals. A key matches every query that starts with it.
+ * Queries whose answers belong to the ACTIVE QSDM wallet: balance, nonce and signer state, recent transactions,
+ * stakes, rewards, miner enrollment, pool, links and referrals. A key matches every query that starts with it.
  */
 export const QSDM_WALLET_QUERY_KEYS = [
   QueryKeys.QsdmCellAccount,
+  QueryKeys.QsdmWalletHistory,
   QueryKeys.QsdmCoreStatus,
   QueryKeys.MainAccountBalance,
   QueryKeys.AccountBalance,
