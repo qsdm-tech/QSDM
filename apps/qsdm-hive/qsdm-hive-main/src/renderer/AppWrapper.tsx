@@ -23,6 +23,7 @@ import {
 import { OnboardingLayout } from './features/onboarding/components/OnboardingLayout';
 import { OnboardingProvider } from './features/onboarding/context/onboarding-context';
 import { useLowMainAccountBalanceWarnings } from './features/settings/hooks/useLowMainAccountBalanceWarnings';
+import { useQsdmWalletChangeListener } from './features/settings/hooks/useQsdmWalletChangeListener';
 import { useStakingAccountRecoveryFlow } from './features/settings/hooks/useStakingAccountRecoveryFlow';
 import {
   MyNodeProvider,
@@ -154,6 +155,7 @@ function AppWrapper(): JSX.Element {
   useTaskNotifications({ onTaskNotificationReceived: addTaskNotification });
 
   useK2ConnectionErrorListener();
+  useQsdmWalletChangeListener();
 
   if (!isOnboarding) {
     return (

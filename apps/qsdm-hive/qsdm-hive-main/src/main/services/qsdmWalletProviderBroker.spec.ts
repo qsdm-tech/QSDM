@@ -228,6 +228,7 @@ describe('qsdmWalletProviderBroker', () => {
     expect(mockSubmitQsdmWalletTransferIntent).toHaveBeenCalledWith({
       recipient: sender,
       amount: 0.00000001,
+      expectedSender: sender,
     });
   });
 
@@ -262,6 +263,7 @@ describe('qsdmWalletProviderBroker', () => {
     expect(mockSubmitQsdmWalletTransferIntent).toHaveBeenCalledWith({
       recipient: sender,
       amount: 1.25,
+      expectedSender: sender,
     });
     expect(getQsdmWalletProviderPermissions().permissions).toEqual([]);
   });

@@ -76,6 +76,28 @@ describe('QSDM Hive IPC validation', () => {
         },
       ])
     ).toThrow(/amount is below/);
+
+    expect(() =>
+      validateIpcPayload(Endpoints.TRANSFER_CELL_FROM_MAIN_WALLET, [
+        {
+          accountName: 'Blackbeard',
+          amount: 1,
+          toWalletAddress: validAddress,
+          fromAddress: validAddress,
+        },
+      ])
+    ).not.toThrow();
+
+    expect(() =>
+      validateIpcPayload(Endpoints.TRANSFER_CELL_FROM_MAIN_WALLET, [
+        {
+          accountName: 'Blackbeard',
+          amount: 1,
+          toWalletAddress: validAddress,
+          fromAddress: '../not-a-wallet',
+        },
+      ])
+    ).toThrow(/fromAddress has an invalid format/);
   });
 
   it('rejects unsupported signed task actions', () => {

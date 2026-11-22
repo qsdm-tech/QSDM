@@ -208,6 +208,9 @@ const validateTransfer = (endpoint: string, payload: unknown) => {
   ensureString(endpoint, object, 'toWalletAddress', {
     pattern: SAFE_ADDRESS,
   });
+  ensureOptionalString(endpoint, object, 'fromAddress', {
+    pattern: SAFE_ADDRESS,
+  });
 };
 
 const validateSignedTransaction = (endpoint: string, payload: unknown) => {

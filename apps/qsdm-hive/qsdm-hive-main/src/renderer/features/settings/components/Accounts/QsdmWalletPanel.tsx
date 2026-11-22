@@ -231,7 +231,8 @@ export function QsdmWalletPanel() {
       transferCellFromMainWallet(
         '__qsdm_signer__',
         amountNumber,
-        recipient.trim()
+        recipient.trim(),
+        address
       ),
     {
       onMutate: () => {

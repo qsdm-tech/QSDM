@@ -106,6 +106,7 @@ import {
 } from './notifications';
 import onDeepLinkNavigation from './onDeepLinkNavigation';
 import onK2ConnectionError from './onK2ConnectionError';
+import onQsdmWalletChanged from './onQsdmWalletChanged';
 import onSystemWakeUp from './onSystemWakeUp';
 import onVariablesUpdatedFromMainProcess from './onVariablesUpdatedFromMainProcess';
 import openBrowserWindow from './openBrowserWindow';
@@ -239,6 +240,7 @@ export default {
   renameQsdmWallet,
   forgetQsdmWallet,
   recoverQsdmWallet,
+  onQsdmWalletChanged,
   restoreQsdmSignerWallet,
   unlockQsdmSignerWallet,
   getQsdmWalletProviderPermissions,

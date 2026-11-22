@@ -35,11 +35,31 @@ type QsdmWalletTransferParams = {
   recipient: string;
   amount: number;
   fee?: number;
+  /** The sender address the screen showed; the send is refused when another wallet is active now. */
+  expectedSender?: string;
 };
 
 type QsdmWalletTransferConflict = 'nonce' | 'pending';
 
+export const QSDM_ACTIVE_WALLET_CHANGED_MESSAGE =
+  'The active wallet changed. Check the amount and send again.';
+
 let walletTransferQueue: Promise<void> = Promise.resolve();
+// Sends queued or running. A wallet switch is refused while any is, so a send never mixes two wallets.
+let walletTransfersInProgress = 0;
+
+export const isQsdmWalletTransferInProgress = () =>
+  walletTransfersInProgress > 0;
+
+const sameWalletAddress = (left?: string, right?: string) =>
+  !!left?.trim() && left.trim().toLowerCase() === right?.trim().toLowerCase();
+
+// The signer files are the ACTIVE wallet's: nothing is signed for an address that is no longer active.
+const assertActiveWalletSender = (sender?: string) => {
+  if (!sameWalletAddress(sender, getQsdmTaskActionSender())) {
+    throw new Error(QSDM_ACTIVE_WALLET_CHANGED_MESSAGE);
+  }
+};
 
 const readEnv = (key: string, fallback = '') => {
   const value = process.env[key];
@@ -110,6 +130,7 @@ const signQsdmWalletTransferWithCli = async (
   envelope: UnsignedQsdmWalletEnvelope
 ): Promise<QsdmSignedTransactionEnvelope> => {
   assertWalletSignerConfigured();
+  assertActiveWalletSender(envelope.sender);
 
   const args = ['wallet', 'sign-tx', '--envelope-file', '-'];
   const keystorePath = getQsdmTaskActionKeystorePath();
@@ -217,12 +238,20 @@ const submitQsdmWalletTransfer = async ({
   recipient,
   amount,
   fee = 0,
+  expectedSender,
 }: QsdmWalletTransferParams): Promise<QsdmSubmitSignedTransactionResponse> => {
   await assertQsdmCanonicalChainSafety({ forceRefresh: true });
   assertWalletSignerConfigured();
   const sender = getQsdmTaskActionSender();
   if (!sender) {
     throw new Error('QSDM signer address is not configured');
+  }
+  // The amount was checked against the balance of the wallet the screen showed.
+  if (
+    expectedSender !== undefined &&
+    !sameWalletAddress(expectedSender, sender)
+  ) {
+    throw new Error(QSDM_ACTIVE_WALLET_CHANGED_MESSAGE);
   }
 
   const signAndSubmit = async (nonce: number) => {
@@ -284,5 +313,11 @@ const submitQsdmWalletTransfer = async ({
 
 export const submitQsdmWalletTransferIntent = (
   params: QsdmWalletTransferParams
-): Promise<QsdmSubmitSignedTransactionResponse> =>
-  enqueueWalletTransfer(() => submitQsdmWalletTransfer(params));
+): Promise<QsdmSubmitSignedTransactionResponse> => {
+  walletTransfersInProgress += 1;
+  return enqueueWalletTransfer(() => submitQsdmWalletTransfer(params)).finally(
+    () => {
+      walletTransfersInProgress -= 1;
+    }
+  );
+};
