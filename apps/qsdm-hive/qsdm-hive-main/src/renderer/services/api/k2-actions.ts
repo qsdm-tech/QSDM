@@ -52,12 +52,15 @@ export const stakeOnTask = (params: DelegateStakeParam) => {
 export const transferCellFromMainWallet = (
   accountName: string,
   amount: number,
-  toWalletAddress: string
+  toWalletAddress: string,
+  // The QSDM address shown as the sender: Hive refuses the send if another wallet is active now.
+  fromAddress?: string
 ) => {
   return window.main.transferCellFromMainWallet({
     accountName,
     amount,
     toWalletAddress,
+    ...(fromAddress ? { fromAddress } : {}),
   });
 };
 export const transferCellFromStakingWallet = (

@@ -20,6 +20,17 @@ import type { Event } from 'electron';
 let mockSignerDir = '';
 const mockRunningTasks: Record<string, unknown> = {};
 const mockInitializeSecrets = jest.fn();
+let mockSendInProgress = false;
+const mockNotifyWalletChanged = jest.fn();
+
+jest.mock('main/services/qsdmWalletTransfer', () => ({
+  isQsdmWalletTransferInProgress: () => mockSendInProgress,
+}));
+
+jest.mock('main/services/qsdmActiveWallet', () => ({
+  notifyQsdmActiveWalletChanged: (address: string) =>
+    mockNotifyWalletChanged(address),
+}));
 
 jest.mock('main/services/qsdmTaskActionSigner', () => {
   const actual = jest.requireActual('main/services/qsdmTaskActionSigner');
@@ -63,6 +74,8 @@ describe('QSDM wallet list controllers', () => {
     );
     mockInitializeSecrets.mockReset();
     mockInitializeSecrets.mockReturnValue({ configured: true });
+    mockSendInProgress = false;
+    mockNotifyWalletChanged.mockReset();
     // Hive 1.4.24 state: B imported over A, A kept as a .bak file with its passphrase entry.
     fs.writeFileSync(path.join(mockSignerDir, 'wallet.json'), keystore(B));
     fs.writeFileSync(path.join(mockSignerDir, 'passphrase.safe'), 'safe-B');
@@ -142,6 +155,67 @@ describe('QSDM wallet list controllers', () => {
       expect(mockInitializeSecrets).not.toHaveBeenCalled();
     }
   );
+
+  it('refuses to switch while a CELL send from the active wallet is in progress', async () => {
+    await recoverQsdmWalletController(event, {
+      backupFile: 'wallet.json.bak-1795029829858',
+    });
+    mockSendInProgress = true;
+
+    await expect(
+      activateQsdmWalletController(event, { address: A })
+    ).rejects.toThrow(
+      'A CELL send from the active wallet is still in progress. Switch wallets when it is done.'
+    );
+    expect(() => assertQsdmWalletSwitchAllowed(true)).toThrow(
+      'still in progress'
+    );
+    expect(() => assertQsdmWalletSwitchAllowed(false)).not.toThrow();
+    expect(
+      fs.readFileSync(path.join(mockSignerDir, 'wallet.json'), 'utf-8')
+    ).toBe(keystore(B));
+    expect(mockInitializeSecrets).not.toHaveBeenCalled();
+    expect(mockNotifyWalletChanged).not.toHaveBeenCalled();
+
+    mockSendInProgress = false;
+    await expect(
+      activateQsdmWalletController(event, { address: A })
+    ).resolves.toEqual({ address: A, unlocked: true });
+  });
+
+  it('tells the rest of Hive after a switch, and only after a switch', async () => {
+    let senderWhenNotified: string | undefined;
+    mockNotifyWalletChanged.mockImplementation(() => {
+      senderWhenNotified = process.env.QSDM_TASK_ACTION_SENDER;
+    });
+
+    // Add Back and Rename change the list, not the active wallet.
+    await recoverQsdmWalletController(event, {
+      backupFile: 'wallet.json.bak-1795029829858',
+    });
+    await renameQsdmWalletController(event, { address: A, label: 'Ops' });
+    expect(mockNotifyWalletChanged).not.toHaveBeenCalled();
+    expect((await listQsdmWalletsController()).active).toBe(B);
+
+    await activateQsdmWalletController(event, { address: A });
+    expect(mockNotifyWalletChanged).toHaveBeenCalledTimes(1);
+    expect(mockNotifyWalletChanged).toHaveBeenCalledWith(A);
+    // The signer and its passphrase already belong to A when the windows hear about it.
+    expect(senderWhenNotified).toBe(A);
+    expect(mockInitializeSecrets.mock.invocationCallOrder[0]).toBeLessThan(
+      mockNotifyWalletChanged.mock.invocationCallOrder[0]
+    );
+
+    // The active wallet cannot be removed; the previously active one can, and A stays active.
+    await expect(
+      forgetQsdmWalletController(event, { address: A, confirmAddress: A })
+    ).rejects.toThrow('Switch to another');
+    await forgetQsdmWalletController(event, { address: B, confirmAddress: B });
+    expect(mockNotifyWalletChanged).toHaveBeenCalledTimes(1);
+    const after = await listQsdmWalletsController();
+    expect(after.active).toBe(A);
+    expect(after.wallets.map((w) => w.address)).toEqual([A]);
+  });
 
   it('lets other tasks run while switching', async () => {
     await recoverQsdmWalletController(event, {

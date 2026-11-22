@@ -196,6 +196,49 @@ export interface QsdmWalletRecoverRequest {
   label?: string;
 }
 
+/** Recent transactions: transfers (sent and received) or mining rewards. */
+export type QsdmWalletHistoryKind = 'transfers' | 'rewards';
+
+export type QsdmWalletHistoryStatus = 'pending' | 'confirmed' | 'failed';
+
+export interface QsdmWalletHistoryItem {
+  txId: string;
+  /** The log index inside the transaction (network history only). */
+  index?: number;
+  /** ISO-8601 time. */
+  time: string;
+  type: 'sent' | 'received' | 'reward' | 'other';
+  /** The other address: the recipient of a send, the sender of a receive. */
+  counterparty?: string;
+  /** CELL, never negative; outgoing gives the sign. */
+  amount: number;
+  outgoing: boolean;
+  fee?: number;
+  status: QsdmWalletHistoryStatus;
+  height?: number;
+  /** local: Hive's own record of a send it made, until the network history has it. */
+  source: 'chain' | 'local';
+}
+
+export interface QsdmWalletHistoryRequest {
+  address: string;
+  kind?: QsdmWalletHistoryKind;
+  /** The cursor of the next older page (nextBefore of the previous page). */
+  before?: string;
+  limit?: number;
+}
+
+export interface QsdmWalletHistoryResponse {
+  address: string;
+  kind: QsdmWalletHistoryKind;
+  /** false when the network history did not answer (not live yet, or unreachable). */
+  available: boolean;
+  items: QsdmWalletHistoryItem[];
+  nextBefore: string | null;
+  /** Hive's own sends from this wallet, newest first (first page of the transfers only). */
+  localSends?: QsdmWalletHistoryItem[];
+}
+
 export interface QsdmSignerWalletUnlockRequest {
   passphrase: string;
 }

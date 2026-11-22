@@ -303,7 +303,12 @@ const sendCell = async ({
       approveLabel: 'Send CELL',
     })
   );
-  return submitQsdmWalletTransferIntent({ recipient, amount });
+  // Sent from the wallet the approval showed, or refused.
+  return submitQsdmWalletTransferIntent({
+    recipient,
+    amount,
+    expectedSender: address,
+  });
 };
 
 export const handleWalletProviderRequest = async (

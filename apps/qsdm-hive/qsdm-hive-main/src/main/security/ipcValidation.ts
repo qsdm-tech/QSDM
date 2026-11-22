@@ -208,6 +208,9 @@ const validateTransfer = (endpoint: string, payload: unknown) => {
   ensureString(endpoint, object, 'toWalletAddress', {
     pattern: SAFE_ADDRESS,
   });
+  ensureOptionalString(endpoint, object, 'fromAddress', {
+    pattern: SAFE_ADDRESS,
+  });
 };
 
 const validateSignedTransaction = (endpoint: string, payload: unknown) => {
@@ -581,6 +584,21 @@ export const validateIpcPayload = (
         invalid(endpoint, 'backupFile must name a wallet.json.bak-<time> file');
       }
       ensureOptionalString(endpoint, object, 'label', { max: 40 });
+      break;
+    }
+    case Endpoints.GET_QSDM_WALLET_HISTORY: {
+      const object = ensureObject(endpoint, payload);
+      ensureWalletAddress(endpoint, object, 'address');
+      const kind = ensureOptionalString(endpoint, object, 'kind', { max: 16 });
+      if (kind !== undefined && kind !== 'transfers' && kind !== 'rewards') {
+        invalid(endpoint, 'kind must be transfers or rewards');
+      }
+      ensureOptionalString(endpoint, object, 'before', { max: 512 });
+      ensureOptionalNumber(endpoint, object, 'limit', {
+        min: 1,
+        max: 200,
+        integer: true,
+      });
       break;
     }
     case Endpoints.EXPORT_QSDM_SIGNER_RECOVERY_WORDS: {

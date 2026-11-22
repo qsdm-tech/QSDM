@@ -2,6 +2,7 @@ import { Event } from 'electron';
 import path from 'path';
 
 import { isQsdmMinerSystemTaskId } from 'config/qsdmSystemTasks';
+import { notifyQsdmActiveWalletChanged } from 'main/services/qsdmActiveWallet';
 import qsdmHiveTasks from 'main/services/qsdmHiveTasks';
 import { initializeQsdmSignerSecretStore } from 'main/services/qsdmSignerSecretStore';
 import { getQsdmDefaultLocalSignerPaths } from 'main/services/qsdmTaskActionSigner';
@@ -14,6 +15,7 @@ import {
   recoverQsdmBackupWallet,
   renameQsdmStoredWallet,
 } from 'main/services/qsdmWalletStore';
+import { isQsdmWalletTransferInProgress } from 'main/services/qsdmWalletTransfer';
 import {
   QsdmWalletActivateRequest,
   QsdmWalletActivateResponse,
@@ -38,15 +40,31 @@ const assertNoMinerRunning = () => {
   }
 };
 
+// A send signs with the active wallet's files, which a switch replaces: the switch waits until no send is in progress.
+const assertNoSendInProgress = () => {
+  if (isQsdmWalletTransferInProgress()) {
+    throw new QsdmWalletStoreError(
+      'SEND_IN_PROGRESS',
+      'A CELL send from the active wallet is still in progress. Switch wallets when it is done.'
+    );
+  }
+};
+
 /** Create, import and restore call this first: asking to switch while a miner runs is refused before anything is written. */
 export const assertQsdmWalletSwitchAllowed = (makeActive?: boolean) => {
-  if (makeActive) assertNoMinerRunning();
+  if (makeActive) {
+    assertNoMinerRunning();
+    assertNoSendInProgress();
+  }
 };
 
 const switchTo = (address: string) => {
   assertNoMinerRunning();
+  assertNoSendInProgress();
   const switched = activateQsdmStoredWallet(address);
   const secrets = initializeQsdmSignerSecretStore();
+  // Cached balances are dropped and every window drops the previous wallet's data.
+  notifyQsdmActiveWalletChanged(switched.address);
   return { ...switched, unlocked: !!secrets.configured, secrets };
 };
 
