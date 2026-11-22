@@ -47,6 +47,7 @@ import {
   buildQsdmTaskReadUrls,
   QSDM_TASK_RUNTIME_MODE,
 } from '../../config/qsdm';
+import { isQsdmMiningPlatform } from '../../config/qsdmPlatformSupport';
 import {
   QSDM_EDGE_WORKER_GPU_SYSTEM_TASK_ID,
   QSDM_EDGE_WORKER_RAM_SYSTEM_TASK_ID,
@@ -54,6 +55,7 @@ import {
   isQsdmHiveInternalTaskId,
   QSDM_MINER_SYSTEM_TASK_ID,
   QSDM_MOTHER_HIVE_SYSTEM_TASK_ID,
+  qsdmTaskSendsSignedStopAction,
 } from '../../config/qsdmSystemTasks';
 import { SystemDbKeys } from '../../config/systemDbKeys';
 import { getAppDataPath } from '../node/helpers/getAppDataPath';
@@ -64,6 +66,7 @@ import { submitQsdmTaskActionIntent } from './qsdmTaskActions';
 import { getQsdmTaskActionSender } from './qsdmTaskActionSigner';
 import { qsdmGetFirstJson } from './qsdmHttpRead';
 import { assertQsdmMinerEnrollmentReady } from './qsdmMinerEnrollment';
+import { startQsdmMinerEnrollmentWatch } from './qsdmMinerEnrollmentWatch';
 import {
   getQsdmTaskStakeOwnership,
   normalizeQsdmNativeCellAmountMapToDenomination,
@@ -728,6 +731,16 @@ export class QsdmHiveTaskService {
     await this.addRunningTaskPubKey(taskAccountPubKey);
 
     if (QSDM_TASK_RUNTIME_MODE === 'qsdm-native') {
+      if (isQsdmMinerSystemTask(taskAccountPubKey)) {
+        // Started or adopted alike: notice when the chain removes the
+        // enrollment while this miner runs, and enroll again.
+        startQsdmMinerEnrollmentWatch(
+          taskAccountPubKey,
+          childTaskProcess,
+          () =>
+            this.RUNNING_TASKS[taskAccountPubKey]?.child === childTaskProcess
+        );
+      }
       if (taskInfo) {
         this.upsertStartedTaskData(taskAccountPubKey, taskInfo);
       }
@@ -1164,20 +1177,28 @@ export class QsdmHiveTaskService {
       return true;
     }
 
-    try {
-      await assertQsdmMinerEnrollmentReady();
-    } catch (error) {
-      console.warn(
-        'QSDM miner process is not backed by an active enrollment for this signer and GPU.',
-        error
-      );
+    // Restoring the miner only adopts a miner process that is still running.
+    // Without one (macOS, a PC without an NVIDIA GPU, a stopped miner) there
+    // is nothing to check, and no enrollment lookup is sent.
+    if (!isQsdmMiningPlatform(process.platform)) {
       return false;
     }
-
     const processInfo = await getQsdmMinerSystemProcessInfo();
     if (!processInfo) {
       return false;
     }
+
+    try {
+      await assertQsdmMinerEnrollmentReady();
+    } catch (error: any) {
+      console.warn(
+        `QSDM Miner process ${processInfo.pid} was not adopted: ${
+          error?.message || error
+        }`
+      );
+      return false;
+    }
+
     await stopExtraQsdmMinerSystemProcesses(processInfo.pid);
 
     const { child, secret } = adoptQsdmMinerSystemProcess(processInfo);
@@ -1263,7 +1284,10 @@ export class QsdmHiveTaskService {
         if (!skipRemoveFromRunningTasks) {
           await this.removeRunningTaskPubKey(taskAccountPubKey);
         }
-        if (QSDM_TASK_RUNTIME_MODE === 'qsdm-native') {
+        if (
+          QSDM_TASK_RUNTIME_MODE === 'qsdm-native' &&
+          qsdmTaskSendsSignedStopAction(taskAccountPubKey)
+        ) {
           try {
             await submitQsdmTaskActionIntent({
               taskId: taskAccountPubKey,
@@ -1408,7 +1432,10 @@ export class QsdmHiveTaskService {
       await this.removeRunningTaskPubKey(taskAccountPubKey);
     }
 
-    if (QSDM_TASK_RUNTIME_MODE === 'qsdm-native') {
+    if (
+      QSDM_TASK_RUNTIME_MODE === 'qsdm-native' &&
+      qsdmTaskSendsSignedStopAction(taskAccountPubKey)
+    ) {
       try {
         await submitQsdmTaskActionIntent({
           taskId: taskAccountPubKey,
@@ -1696,9 +1723,18 @@ export class QsdmHiveTaskService {
         return { upgradeableTaskIds: [] };
       }
 
-      const results = await Promise.allSettled(
-        startedTasksPubKeys.map((pubkey) => this.getQsdmNativeTaskState(pubkey))
-      );
+      // One task after another: at launch and on every catalog refresh this
+      // sent one request per started task at the same moment, a burst against
+      // the API's per-IP limit.
+      const results = await startedTasksPubKeys.reduce<
+        Promise<PromiseSettledResult<RawTaskData>[]>
+      >(async (previous, pubkey) => {
+        const settled = await previous;
+        const [result] = await Promise.allSettled([
+          this.getQsdmNativeTaskState(pubkey),
+        ]);
+        return [...settled, result];
+      }, Promise.resolve([]));
 
       this.startedTasksData = results
         .filter(

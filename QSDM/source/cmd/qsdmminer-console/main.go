@@ -197,10 +197,20 @@ func loadConfig(path string) (Config, error) {
 	if err != nil {
 		return c, fmt.Errorf("read %s: %w", path, err)
 	}
-	if _, err := toml.Decode(string(b), &c); err != nil {
+	if _, err := toml.Decode(string(normalizeConfigLineEndings(b)), &c); err != nil {
 		return c, fmt.Errorf("decode %s: %w", path, err)
 	}
 	return c, nil
+}
+
+// normalizeConfigLineEndings turns CRLF and lone CR line endings into LF.
+// TOML allows a CR only as part of CRLF, and BurntSushi/toml v1.6 rejects a
+// lone CR ("TOML files cannot contain control characters: '0x0d'"). Older
+// QSDM Hive builds rewrote miner.toml with mixed line endings (lone CRs and
+// CRLFs), so a miner that parsed the file as is refused to start.
+func normalizeConfigLineEndings(b []byte) []byte {
+	b = bytes.ReplaceAll(b, []byte("\r\n"), []byte("\n"))
+	return bytes.ReplaceAll(b, []byte("\r"), []byte("\n"))
 }
 
 func saveConfig(path string, c Config) error {

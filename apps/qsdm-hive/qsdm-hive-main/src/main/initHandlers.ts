@@ -135,6 +135,7 @@ const endpointToControllerMap: Record<
   [Endpoints.GET_HIVE_VERSION_POLICY]: controllers.getHiveVersionPolicy,
   [Endpoints.ARCHIVE_TASK]: controllers.archiveTask,
   [Endpoints.DOWNLOAD_APP_UPDATE]: controllers.downloadAppUpdate,
+  [Endpoints.RESTART_TO_UPDATE]: controllers.restartToUpdate,
   [Endpoints.CHECK_APP_UPDATE]: controllers.checkAppUpdate,
   [Endpoints.GET_PLATFORM]: controllers.getPlatform,
   [Endpoints.STORE_ALL_TIME_REWARDS]: controllers.storeAllTimeRewards,

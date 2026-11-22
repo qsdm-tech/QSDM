@@ -316,6 +316,26 @@ describe('qsdmTaskActions', () => {
     }
   );
 
+  it('leaves HTTP 429 to the shared retry instead of retrying it again', async () => {
+    useTaskRetryClock();
+    autoSignTask();
+    mockedAxiosGet.mockResolvedValue({ data: { nonce: 4 } });
+    mockedAxiosPost.mockRejectedValueOnce({
+      isAxiosError: true,
+      message: 'Request failed with status code 429',
+      response: { status: 429, headers: {} },
+    });
+    await expect(
+      submitQsdmTaskActionIntent({
+        taskId: 'task-1',
+        action: 'start',
+        waitForCommit: false,
+      })
+    ).rejects.toMatchObject({ response: { status: 429 } });
+    expect(mockedAxiosPost).toHaveBeenCalledTimes(1);
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
   it('interprets an obsolete two-digit HTTP year relative to the current century', async () => {
     useTaskRetryClock();
     autoSignTask();

@@ -20,11 +20,13 @@ import { SystemDbKeys } from 'config/systemDbKeys';
 import cryptoRandomString from 'crypto-random-string';
 import { Application } from 'express';
 import { get } from 'lodash';
+import { isQsdmMiningPlatform } from 'config/qsdmPlatformSupport';
 import {
   getQsdmMinerSiblingConflictMessage,
   getQsdmMinerSiblingTaskId,
   isQsdmPoolMinerSystemTaskId,
   QSDM_POOL_MINER_SYSTEM_TASK_ID,
+  qsdmTaskSendsSignedStopAction,
 } from 'config/qsdmSystemTasks';
 import getUserConfig from 'main/controllers/getUserConfig';
 import db from 'main/db';
@@ -37,8 +39,11 @@ import {
   describeQsdmMinerUnbondWindow,
   enrollQsdmMiner,
   getQsdmMinerEnrollmentStatus,
+  isQsdmNoNvidiaGpuPc,
   prepareQsdmMinerV2Config,
+  QSDM_NO_NVIDIA_GPU_MESSAGE,
 } from 'main/services/qsdmMinerEnrollment';
+import { setQsdmMinerTaskControls } from 'main/services/qsdmMinerEnrollmentWatch';
 import {
   buildQsdmPoolJoinDetail,
   planQsdmPoolMinerStart,
@@ -61,6 +66,7 @@ import {
   startQsdmMotherHiveSystemProcess,
   startQsdmSkyFangLinkSystemProcess,
   startOrAdoptQsdmMinerSystemProcess,
+  waitForPidExit,
   writeQsdmSystemTaskLog,
 } from 'main/services/qsdmSystemTasks';
 import { getQsdmTaskStakeOwnership } from 'main/services/qsdmTaskStake';
@@ -230,6 +236,14 @@ const startTask = async (
 
   if (isQsdmNativeTaskRuntime && isSystemMinerTask) {
     try {
+      // A PC without an NVIDIA GPU cannot mine: say so plainly before any
+      // wallet or enrollment step (macOS keeps its own message).
+      if (
+        isQsdmMiningPlatform(process.platform) &&
+        (await isQsdmNoNvidiaGpuPc())
+      ) {
+        throw new Error(QSDM_NO_NVIDIA_GPU_MESSAGE);
+      }
       // Public mining only accepts proofs signed by the enrollment owner's
       // wallet. Ask for an unlocked wallet before any enrollment prompt.
       assertQsdmMinerOperatorSigningReady();
@@ -502,6 +516,7 @@ const startTask = async (
     console.error('ERROR STARTING TASK', err);
     if (
       isQsdmNativeTaskRuntime &&
+      qsdmTaskSendsSignedStopAction(taskAccountPubKey) &&
       (qsdmStartActionAccepted || (isSystemTask && isTaskRunning))
     ) {
       try {
@@ -523,6 +538,24 @@ const startTask = async (
     });
   }
 };
+
+// The miner enrollment watch stops a miner task, or restarts it after it
+// enrolled again, through the same start path as the Start button. The old
+// miner process must be gone first, or the start would adopt it. A task the
+// user stopped meanwhile stays stopped.
+setQsdmMinerTaskControls({
+  stop: async (taskId) => {
+    if (!qsdmHiveTasks.RUNNING_TASKS[taskId]) return;
+    await qsdmHiveTasks.stopTask(taskId);
+  },
+  restart: async (taskId) => {
+    const runtime = qsdmHiveTasks.RUNNING_TASKS[taskId];
+    if (!runtime) return;
+    await qsdmHiveTasks.stopTask(taskId);
+    if (runtime.child.pid) await waitForPidExit(runtime.child.pid);
+    await startTask({} as Event, { taskAccountPubKey: taskId });
+  },
+});
 
 export async function clearTaskRetryTimeout(taskPubkey: string) {
   const allTaskRetryData: {

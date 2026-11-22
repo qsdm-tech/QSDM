@@ -1,6 +1,12 @@
 import activateQsdmWallet from './activateQsdmWallet';
 import appRelaunch from './appRelaunch';
-import { checkAppUpdate, onAppDownloaded, onAppUpdate } from './appUpdates';
+import {
+  checkAppUpdate,
+  onAppDownloaded,
+  onAppUpdate,
+  onHiveUpdateRequired,
+  restartToUpdate,
+} from './appUpdates';
 import archiveTask from './archiveTask';
 import { resetPin } from './auth';
 import { fetchS3FolderContents } from './aws';
@@ -324,6 +330,8 @@ export default {
   onSystemWakeUp,
   getMainLogs,
   onAppDownloaded,
+  onHiveUpdateRequired,
+  restartToUpdate,
   checkAppUpdate,
   getStartedTasksPubKeys,
   upgradeTask,

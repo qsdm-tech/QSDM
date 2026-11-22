@@ -15,8 +15,10 @@ import {
   initializeAppUpdater,
   QSDM_HIVE_NO_SELF_UPDATE_MESSAGE,
   resetAppUpdaterForTests,
+  restartToUpdate,
   shouldEnableAutoUpdates,
 } from './AppUpdater';
+import { getDownloadedHiveUpdate } from './services/hiveUpdateState';
 import {
   getVerifiedQsdmHiveRelease,
   verifyDownloadedQsdmHiveUpdate,
@@ -254,7 +256,7 @@ describe('AppUpdater mandatory update flow', () => {
     expect(updater.checkForUpdates).toHaveBeenCalledTimes(2);
   });
 
-  it('verifies the installer, notifies every renderer, and forces a restart prompt', async () => {
+  it('verifies the installer, notifies every renderer, and waits for Restart to update', async () => {
     updater.checkForUpdates.mockResolvedValue({
       isUpdateAvailable: false,
       updateInfo: { version: '1.4.11' },
@@ -280,15 +282,41 @@ describe('AppUpdater mandatory update flow', () => {
       RendererEndpoints.UPDATE_DOWNLOADED,
       expect.objectContaining({ version: '1.4.12' })
     );
-    expect(dialog.showMessageBox).toHaveBeenCalledWith(
-      mainWindow,
-      expect.objectContaining({
-        title: 'QSDM Hive Update Ready',
-        buttons: ['Update and Restart'],
-      })
-    );
+    // No prompt and no restart on its own: Hive and its miner keep running.
+    expect(dialog.showMessageBox).not.toHaveBeenCalled();
+    expect(updater.quitAndInstall).not.toHaveBeenCalled();
+    expect(getDownloadedHiveUpdate()).toBe('1.4.12');
+
+    await expect(restartToUpdate()).resolves.toEqual({ restarting: true });
     expect(appCleanup).toHaveBeenCalledTimes(1);
     expect(updater.quitAndInstall).toHaveBeenCalledTimes(1);
     expect(app.isQuitting).toBe(true);
+  });
+
+  it('downloads first and restarts once verified when Restart to update comes early', async () => {
+    updater.checkForUpdates.mockResolvedValue({
+      isUpdateAvailable: true,
+      updateInfo,
+    });
+    updater.downloadUpdate.mockImplementation(async () => {
+      updater.emit('update-downloaded', {
+        ...updateInfo,
+        downloadedFile: 'qsdm-hive-1.4.12.exe',
+      });
+      return ['installer'];
+    });
+    await initializeAppUpdater(
+      mainWindow as unknown as BrowserWindow,
+      appCleanup
+    );
+    await flushPromises();
+
+    await expect(restartToUpdate()).resolves.toEqual({ restarting: false });
+    await flushPromises();
+    await flushPromises();
+
+    expect(verifyDownloadedQsdmHiveUpdate).toHaveBeenCalled();
+    expect(appCleanup).toHaveBeenCalledTimes(1);
+    expect(updater.quitAndInstall).toHaveBeenCalledTimes(1);
   });
 });

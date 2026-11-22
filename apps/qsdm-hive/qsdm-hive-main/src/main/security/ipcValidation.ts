@@ -668,6 +668,7 @@ export const validateIpcPayload = (
     case Endpoints.GET_QSDM_VIRTUAL_COMPUTE_JOBS:
     case Endpoints.GET_QSDM_BOUNTY_LEDGER:
     case Endpoints.QUIT_APP:
+    case Endpoints.RESTART_TO_UPDATE:
       ensureNoPayload(endpoint, args);
       break;
     default:

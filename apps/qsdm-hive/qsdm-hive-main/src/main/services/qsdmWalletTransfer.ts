@@ -243,6 +243,9 @@ const submitQsdmWalletTransfer = async ({
     };
 
     const signedEnvelope = await signQsdmWalletTransferWithCli(envelope);
+    // An HTTP 429 answer is retried with this same signed envelope by the
+    // shared retry (qsdmHttpRetry): the API's rate limiter refuses before the
+    // handler runs, and the nonce makes a repeat a 409, never a second spend.
     // Recheck after signing and on every nonce retry, then retain that endpoint.
     const safety = await assertQsdmCanonicalChainSafety({ forceRefresh: true });
     const verifiedApiUrl = safety.effectiveApiUrl.replace(/\/+$/, '');

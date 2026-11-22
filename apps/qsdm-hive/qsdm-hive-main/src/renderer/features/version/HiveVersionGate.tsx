@@ -9,8 +9,11 @@ import {
   getHiveVersionPolicy,
   openBrowserWindow,
   quitApp,
+  restartToUpdate,
 } from 'renderer/services';
 import { formatHiveVersion } from 'utils';
+
+import { HiveUpdateBanner } from './HiveUpdateBanner';
 
 type Props = {
   children: React.ReactNode;
@@ -48,6 +51,11 @@ export function HiveVersionGate({ children }: Props): JSX.Element {
   const [isDownloading, setIsDownloading] = React.useState(false);
   const [updateStage, setUpdateStage] = React.useState<UpdateStage>('idle');
   const [updateError, setUpdateError] = React.useState('');
+  const [downloadedUpdate, setDownloadedUpdate] = React.useState<{
+    version?: string;
+  } | null>(null);
+  const [restarting, setRestarting] = React.useState(false);
+  const [restartError, setRestartError] = React.useState('');
   const attemptedPolicy = React.useRef('');
 
   React.useEffect(() => {
@@ -55,16 +63,43 @@ export function HiveVersionGate({ children }: Props): JSX.Element {
       setUpdateStage('downloading');
       setUpdateError('');
     });
-    const removeDownloadedListener = window.main.onAppDownloaded(() => {
-      setUpdateStage('ready');
-      setUpdateError('');
+    const removeDownloadedListener = window.main.onAppDownloaded(
+      (_event, info) => {
+        setUpdateStage('ready');
+        setUpdateError('');
+        const version = (info as { version?: unknown } | undefined)?.version;
+        setDownloadedUpdate({
+          version: typeof version === 'string' ? version : undefined,
+        });
+      }
+    );
+    // An action was refused by the version policy: check it again now, so
+    // the "Restart to update" screen or banner shows at once.
+    const removeRequiredListener = window.main.onHiveUpdateRequired(() => {
+      refetch();
     });
 
     return () => {
       removeAvailableListener();
       removeDownloadedListener();
+      removeRequiredListener();
     };
-  }, []);
+  }, [refetch]);
+
+  const handleRestartToUpdate = async () => {
+    setRestarting(true);
+    setRestartError('');
+    try {
+      const result = await restartToUpdate();
+      if (!result?.restarting) {
+        // Hive restarts by itself once the download is verified.
+        setUpdateStage('downloading');
+      }
+    } catch (error) {
+      setRestarting(false);
+      setRestartError(error instanceof Error ? error.message : String(error));
+    }
+  };
 
   const startAutomaticUpdate = React.useCallback(async () => {
     setUpdateStage('checking');
@@ -143,7 +178,23 @@ export function HiveVersionGate({ children }: Props): JSX.Element {
   }
 
   if (policy?.compatible) {
-    return children as JSX.Element;
+    const updateReady = Boolean(
+      policy.updateDownloadedVersion || downloadedUpdate
+    );
+    if (!updateReady || policy.selfUpdates === false) {
+      return children as JSX.Element;
+    }
+    return (
+      <>
+        <HiveUpdateBanner
+          version={policy.updateDownloadedVersion || downloadedUpdate?.version}
+          restarting={restarting}
+          error={restartError}
+          onRestart={handleRestartToUpdate}
+        />
+        {children}
+      </>
+    );
   }
 
   const requiredVersion =
@@ -226,7 +277,22 @@ export function HiveVersionGate({ children }: Props): JSX.Element {
           </p>
         )}
 
+        {restartError && (
+          <p className="mb-6 rounded-lg border border-qsdm-danger/40 bg-qsdm-danger/10 p-3 text-sm text-[#ffb4b4]">
+            {restartError}
+          </p>
+        )}
+
         <div className="flex flex-wrap gap-3">
+          {canInstallAutomatically && (
+            <button
+              className="h-11 rounded-lg border border-qsdm-teal/40 bg-qsdm-teal px-6 font-semibold text-qsdm-bg transition hover:brightness-105 disabled:opacity-60"
+              disabled={restarting}
+              onClick={handleRestartToUpdate}
+            >
+              {restarting ? 'Restarting...' : 'Restart to update'}
+            </button>
+          )}
           {canInstallAutomatically && updateStage === 'error' && (
             <button
               className="h-11 rounded-lg border border-qsdm-teal/40 bg-qsdm-teal px-6 font-semibold text-qsdm-bg transition hover:brightness-105"
@@ -284,9 +350,9 @@ function getUpdateStatus(stage: UpdateStage, requiredVersion: string) {
     case 'checking':
       return 'Checking the signed QSDM Hive release...';
     case 'downloading':
-      return `Downloading and verifying QSDM Hive ${requiredVersion}. The restart prompt will appear when it is ready.`;
+      return `Downloading and verifying QSDM Hive ${requiredVersion}. Restart to update when it is ready.`;
     case 'ready':
-      return 'The update is verified and ready. Approve the Update and Restart prompt.';
+      return 'The update is verified and ready. Restart to update.';
     case 'error':
       return 'Automatic update failed and will retry in one minute.';
     case 'manual':

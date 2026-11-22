@@ -1,15 +1,18 @@
 import path from 'path';
 import { URL } from 'url';
 
-import { Endpoints } from 'config/endpoints';
+import { Endpoints, RendererEndpoints } from 'config/endpoints';
+import { sendEventAllWindows } from 'utils/sendEventAllWindows';
 
 import { app } from '../app';
 
+import { getDownloadedHiveUpdate } from './hiveUpdateState';
 import {
   getQsdmHiveReleaseWithEnvelopeCache,
   RELEASE_ENVELOPE_CACHE_FOLDER_NAME,
 } from './qsdmReleaseEnvelopeCache';
 import {
+  getQsdmHiveMinSupportedVersion,
   getQsdmHiveReleaseManifestUrl,
   QSDM_HIVE_RELEASE_BASE_URL,
 } from './qsdmReleaseManifest';
@@ -43,6 +46,13 @@ export type HiveVersionPolicyStatus = {
   // update screen then sends the user to the download page instead of
   // updating itself.
   selfUpdates?: boolean;
+  // The newest signed release, and whether this Hive is older than it. With
+  // the manifest's min_supported_version, an older Hive can still be
+  // compatible: it keeps mining and offers "Restart to update".
+  latestVersion?: string | null;
+  updateAvailable?: boolean;
+  // A verified update is downloaded and installs on restart.
+  updateDownloadedVersion?: string;
 };
 
 export type HiveVersionPolicyOptions = {
@@ -61,6 +71,7 @@ export const VERSION_POLICY_ALLOWED_ENDPOINTS = new Set<string>([
   Endpoints.GET_HIVE_VERSION_POLICY,
   Endpoints.DOWNLOAD_APP_UPDATE,
   Endpoints.CHECK_APP_UPDATE,
+  Endpoints.RESTART_TO_UPDATE,
   Endpoints.GET_VERSION,
   Endpoints.GET_PLATFORM,
   Endpoints.COPY_TEXT_TO_CLIPBOARD,
@@ -202,12 +213,20 @@ export async function getHiveVersionPolicyStatus(
   options: HiveVersionPolicyOptions = {}
 ): Promise<HiveVersionPolicyStatus> {
   const now = Date.now();
+  const withDownloadedUpdate = (
+    status: HiveVersionPolicyStatus
+  ): HiveVersionPolicyStatus => {
+    const downloaded = getDownloadedHiveUpdate();
+    return downloaded
+      ? { ...status, updateDownloadedVersion: downloaded }
+      : status;
+  };
   if (
     !options.forceRefresh &&
     cachedStatus &&
     now - cachedStatusAt < POLICY_CACHE_MS
   ) {
-    return cachedStatus;
+    return withDownloadedUpdate(cachedStatus);
   }
 
   const status: HiveVersionPolicyStatus = {
@@ -216,7 +235,28 @@ export async function getHiveVersionPolicyStatus(
   };
   cachedStatus = status;
   cachedStatusAt = now;
-  return status;
+  return withDownloadedUpdate(status);
+}
+
+// The words of the blocked-action error and of the button that fixes it.
+export const QSDM_HIVE_RESTART_TO_UPDATE = 'Restart to update';
+
+export function describeHiveVersionPolicyBlock(
+  status: HiveVersionPolicyStatus
+) {
+  const blocked = `QSDM Hive ${
+    status.currentVersion
+  } is blocked by version policy. Required version: ${
+    status.requiredVersion || 'unknown'
+  }.`;
+  if (
+    status.selfUpdates !== false &&
+    status.reason === 'version-mismatch' &&
+    compareHiveVersions(status.currentVersion, status.requiredVersion) === -1
+  ) {
+    return `${blocked} ${QSDM_HIVE_RESTART_TO_UPDATE}.`;
+  }
+  return `${blocked} Download the latest Hive from ${status.downloadUrl}.`;
 }
 
 export async function assertHiveVersionPolicyAllowsEndpoint(
@@ -228,14 +268,28 @@ export async function assertHiveVersionPolicyAllowsEndpoint(
 
   const status = await getHiveVersionPolicyStatus();
   if (!status.compatible) {
-    throw new Error(
-      `QSDM Hive ${
-        status.currentVersion
-      } is blocked by version policy. Required version: ${
-        status.requiredVersion || 'unknown'
-      }. Download the latest Hive from ${status.downloadUrl}.`
-    );
+    // The renderer checks the policy again at once and offers the button.
+    sendEventAllWindows(RendererEndpoints.HIVE_UPDATE_REQUIRED);
+    throw new Error(describeHiveVersionPolicyBlock(status));
   }
+}
+
+// -1, 0 or 1 for MAJOR.MINOR.PATCH versions; null when either is not one.
+export function compareHiveVersions(
+  left?: string | null,
+  right?: string | null
+): -1 | 0 | 1 | null {
+  const pattern = /^\d+\.\d+\.\d+$/;
+  if (!left || !right || !pattern.test(left) || !pattern.test(right)) {
+    return null;
+  }
+  const a = left.split('.').map(Number);
+  const b = right.split('.').map(Number);
+  for (let index = 0; index < 3; index += 1) {
+    if (a[index] < b[index]) return -1;
+    if (a[index] > b[index]) return 1;
+  }
+  return 0;
 }
 
 async function resolveHiveVersionPolicyStatus(): Promise<HiveVersionPolicyStatus> {
@@ -277,9 +331,16 @@ async function resolveHiveVersionPolicyStatus(): Promise<HiveVersionPolicyStatus
       cacheDirectory: getReleaseEnvelopeCacheDirectory(),
     });
 
+    // With the signed min_supported_version, any Hive from that version up
+    // is compatible; without it, exactly the release version (as before).
+    const minSupportedVersion = getQsdmHiveMinSupportedVersion(
+      release.manifest
+    );
     const status = buildPolicyStatus({
       currentVersion,
-      requiredVersion: release.manifest.version,
+      requiredVersion: minSupportedVersion || release.manifest.version,
+      orNewer: Boolean(minSupportedVersion),
+      latestVersion: release.manifest.version,
       manifestUrl: release.manifestUrl,
       downloadUrl: hasOwnSignedReleaseChannel(process.platform)
         ? release.installerUrl || fallbackDownloadUrl
@@ -306,15 +367,23 @@ async function resolveHiveVersionPolicyStatus(): Promise<HiveVersionPolicyStatus
 function buildPolicyStatus({
   currentVersion,
   requiredVersion,
+  orNewer = false,
+  latestVersion,
   manifestUrl,
   downloadUrl,
 }: {
   currentVersion: string;
   requiredVersion: string;
+  // True: requiredVersion is the oldest allowed (min_supported_version).
+  // False: exactly requiredVersion is allowed (the policy before 1.4.26).
+  orNewer?: boolean;
+  latestVersion?: string;
   manifestUrl: string;
   downloadUrl: string;
 }): HiveVersionPolicyStatus {
-  const compatible = currentVersion === requiredVersion;
+  const compatible = orNewer
+    ? (compareHiveVersions(currentVersion, requiredVersion) ?? -1) >= 0
+    : currentVersion === requiredVersion;
   return {
     compatible,
     updateRequired: !compatible,
@@ -324,6 +393,13 @@ function buildPolicyStatus({
     downloadUrl,
     checkedAt: new Date().toISOString(),
     reason: compatible ? 'current' : 'version-mismatch',
+    ...(orNewer && latestVersion
+      ? {
+          latestVersion,
+          updateAvailable:
+            compareHiveVersions(currentVersion, latestVersion) === -1,
+        }
+      : {}),
   };
 }
 
