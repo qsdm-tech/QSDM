@@ -1,8 +1,14 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react';
 import React from 'react';
 import { useQuery } from 'react-query';
 
-import { checkAppUpdate } from 'renderer/services';
+import { checkAppUpdate, restartToUpdate } from 'renderer/services';
 
 import { HiveVersionGate } from './HiveVersionGate';
 
@@ -20,6 +26,7 @@ jest.mock('renderer/services', () => ({
   getHiveVersionPolicy: jest.fn(),
   openBrowserWindow: jest.fn(),
   quitApp: jest.fn(),
+  restartToUpdate: jest.fn(),
 }));
 
 const oldVersionPolicy = {
@@ -33,18 +40,24 @@ const oldVersionPolicy = {
 
 describe('HiveVersionGate updater integration', () => {
   let updateDownloaded: () => void;
+  let updateRequired: () => void;
   const removeUpdateAvailable = jest.fn();
   const removeUpdateDownloaded = jest.fn();
+  const removeUpdateRequired = jest.fn();
 
   beforeEach(() => {
     updateDownloaded = () => undefined;
+    updateRequired = () => undefined;
     removeUpdateAvailable.mockClear();
     removeUpdateDownloaded.mockClear();
+    removeUpdateRequired.mockClear();
     (checkAppUpdate as jest.Mock).mockReset();
     (checkAppUpdate as jest.Mock).mockResolvedValue({
       isUpdateAvailable: true,
       updateInfo: { version: '1.4.12' },
     });
+    (restartToUpdate as jest.Mock).mockReset();
+    (restartToUpdate as jest.Mock).mockResolvedValue({ restarting: true });
     Object.defineProperty(window, 'main', {
       configurable: true,
       value: {
@@ -53,8 +66,83 @@ describe('HiveVersionGate updater integration', () => {
           updateDownloaded = callback;
           return removeUpdateDownloaded;
         }),
+        onHiveUpdateRequired: jest.fn((callback: () => void) => {
+          updateRequired = callback;
+          return removeUpdateRequired;
+        }),
       },
     });
+  });
+
+  it('offers Restart to update while an older Hive is blocked', async () => {
+    (useQuery as jest.Mock).mockReturnValue({
+      data: oldVersionPolicy,
+      isLoading: false,
+      isFetching: false,
+      refetch: jest.fn(),
+    });
+
+    render(
+      <HiveVersionGate>
+        <div>Protected Hive</div>
+      </HiveVersionGate>
+    );
+    await waitFor(() => expect(checkAppUpdate).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByText('Restart to update'));
+    await waitFor(() => expect(restartToUpdate).toHaveBeenCalledTimes(1));
+  });
+
+  it('keeps the app and mining on screen with a Restart to update banner', async () => {
+    (useQuery as jest.Mock).mockReturnValue({
+      data: {
+        ...oldVersionPolicy,
+        compatible: true,
+        updateRequired: false,
+        requiredVersion: '1.4.11',
+        latestVersion: '1.4.12',
+        updateAvailable: true,
+        updateDownloadedVersion: '1.4.12',
+        reason: 'current',
+      },
+      isLoading: false,
+      isFetching: false,
+      refetch: jest.fn(),
+    });
+
+    render(
+      <HiveVersionGate>
+        <div>Protected Hive</div>
+      </HiveVersionGate>
+    );
+
+    expect(screen.getByText('Protected Hive')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Mining keeps running until you restart.'
+    );
+    fireEvent.click(screen.getByText('Restart to update'));
+    await waitFor(() => expect(restartToUpdate).toHaveBeenCalledTimes(1));
+    expect(checkAppUpdate).not.toHaveBeenCalled();
+  });
+
+  it('checks the policy again as soon as an action was refused', () => {
+    const refetch = jest.fn();
+    (useQuery as jest.Mock).mockReturnValue({
+      data: { ...oldVersionPolicy, compatible: true, reason: 'current' },
+      isLoading: false,
+      isFetching: false,
+      refetch,
+    });
+
+    render(
+      <HiveVersionGate>
+        <div>Protected Hive</div>
+      </HiveVersionGate>
+    );
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+
+    act(() => updateRequired());
+    expect(refetch).toHaveBeenCalledTimes(1);
   });
 
   it('starts an automatic update whenever the approved release is newer', async () => {

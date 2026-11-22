@@ -15,3 +15,7 @@ export const quitApp = async () => {
 export const checkAppUpdate = async () => {
   return window.main.checkAppUpdate();
 };
+
+export const restartToUpdate = async () => {
+  return window.main.restartToUpdate();
+};
