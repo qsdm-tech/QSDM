@@ -73,6 +73,18 @@ test('constructor rejects empty baseURL and trims trailing slashes', () => {
     assert.equal(c2.baseURL, 'http://node:8080');
 });
 
+test('baseURL trim takes linear time on a long run of slashes', () => {
+    // 100,000 slashes not at the end took the old /\/+$/ trim seconds.
+    const slashes = '/'.repeat(100000);
+    const started = Date.now();
+    const inner = new qsdm.QSDMClient('http://node:8080' + slashes + 'x');
+    assert.equal(inner.baseURL, 'http://node:8080' + slashes + 'x');
+    const trailing = new qsdm.QSDMClient('http://node:8080/api' + slashes);
+    assert.equal(trailing.baseURL, 'http://node:8080/api');
+    assert.equal(new qsdm.QSDMClient('///').baseURL, '');
+    assert.ok(Date.now() - started < 1000, 'baseURL trim took over a second');
+});
+
 // --- wallet + tx -----------------------------------------------------------
 
 test('getBalance issues a GET to /api/v1/wallet/balance and unwraps the JSON', async () => {

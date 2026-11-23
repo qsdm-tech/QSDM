@@ -4,6 +4,7 @@
 
 import { dialog } from 'electron';
 import fs from 'fs';
+import http from 'http';
 import os from 'os';
 import path from 'path';
 
@@ -12,8 +13,11 @@ import { getQsdmCellAccount } from 'main/controllers/qsdm/getQsdmCellAccount';
 import {
   getQsdmWalletProviderPermissions,
   handleWalletProviderRequest,
+  publicErrorText,
   QSDM_WALLET_PROVIDER_VERSION,
   revokeQsdmWalletProviderPermission,
+  startQsdmWalletProviderBroker,
+  stopQsdmWalletProviderBroker,
 } from './qsdmWalletProviderBroker';
 
 const mockGetAppDataPath = jest.fn();
@@ -277,5 +281,114 @@ describe('qsdmWalletProviderBroker', () => {
     ).rejects.toThrow('cannot request wallet signatures');
     expect(mockSignQsdmMessageWithCli).not.toHaveBeenCalled();
     expect(dialog.showMessageBox).not.toHaveBeenCalled();
+  });
+
+  it('answers a failed request without local paths', async () => {
+    const homedir = jest.spyOn(os, 'homedir').mockReturnValue('/home/jane');
+    const warn = jest
+      .spyOn(console, 'warn')
+      .mockImplementation(() => undefined);
+    mockGetQsdmTaskActionSignerStatus.mockImplementation(() => {
+      throw new Error('spawn /home/jane/.local/qsdm/bin/qsdmcli ENOENT');
+    });
+    await startQsdmWalletProviderBroker(options);
+    try {
+      const state = JSON.parse(
+        fs.readFileSync(
+          path.join(appDataPath, 'wallet-provider', 'broker.json'),
+          'utf-8'
+        )
+      ) as { port: number; token: string };
+      const reply = await new Promise<{ status?: number; body: string }>(
+        (resolve, reject) => {
+          const body = JSON.stringify(request('qsdm_ping'));
+          const post = http.request(
+            {
+              host: '127.0.0.1',
+              port: state.port,
+              path: '/v1/request',
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${state.token}`,
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(body),
+              },
+            },
+            (response) => {
+              let text = '';
+              response.setEncoding('utf8');
+              response.on('data', (chunk) => {
+                text += chunk;
+              });
+              response.on('end', () =>
+                resolve({ status: response.statusCode, body: text })
+              );
+            }
+          );
+          post.on('error', reject);
+          post.end(body);
+        }
+      );
+
+      expect(reply.status).toBe(400);
+      expect(JSON.parse(reply.body)).toEqual({
+        ok: false,
+        error: 'spawn <path> ENOENT',
+      });
+      expect(reply.body).not.toContain('jane');
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      stopQsdmWalletProviderBroker();
+      homedir.mockRestore();
+      warn.mockRestore();
+    }
+  });
+});
+
+describe('publicErrorText', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('replaces paths in the home folder, spaces included', () => {
+    jest.spyOn(os, 'homedir').mockReturnValue('C:\\Users\\Jane Doe');
+
+    expect(
+      publicErrorText(
+        new Error(
+          'spawn C:\\Users\\Jane Doe\\AppData\\Local\\Programs\\QSDM\\qsdmcli.exe ENOENT'
+        )
+      )
+    ).toBe('spawn <path> ENOENT');
+  });
+
+  it('replaces other absolute paths and keeps the message', () => {
+    jest.spyOn(os, 'homedir').mockReturnValue('/home/jane');
+
+    expect(
+      publicErrorText(
+        new Error(
+          'open /home/jane/.config/QSDM-Hive/keys.json: permission denied'
+        )
+      )
+    ).toBe('open <path>: permission denied');
+    expect(
+      publicErrorText('spawn /opt/QSDM/resources/bin/qsdmcli ENOENT')
+    ).toBe('spawn <path> ENOENT');
+    expect(publicErrorText('D:\\Tools\\qsdmcli.exe exited with code 1')).toBe(
+      '<path> exited with code 1'
+    );
+    expect(publicErrorText('cannot read \\\\nas\\share\\wallet')).toBe(
+      'cannot read <path>'
+    );
+    expect(
+      publicErrorText('POST https://api.qsdm.tech/api/v1/wallet failed')
+    ).toBe('POST https://api.qsdm.tech/api/v1/wallet failed');
+  });
+
+  it('cuts long text at 300 characters', () => {
+    const text = publicErrorText(new Error('x'.repeat(1000)));
+
+    expect(text).toBe(`${'x'.repeat(300)}...`);
   });
 });

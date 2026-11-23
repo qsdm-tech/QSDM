@@ -6,6 +6,7 @@ import { RawTaskData, StakeList, StakingKeyString } from 'models';
 import { wait } from 'utils/wait';
 
 import { getAppDataPath } from '../node/helpers/getAppDataPath';
+import { getTaskNamespacePath } from '../node/helpers/taskPaths';
 
 const appDataPath = getAppDataPath();
 type CachedTaskType = Partial<RawTaskData>;
@@ -17,7 +18,7 @@ type CacheKey =
   | 'stakeList';
 
 const getTaskCachePath = (taskId: string, key?: string) => {
-  const basePath = path.join(appDataPath, 'namespace', taskId);
+  const basePath = getTaskNamespacePath(taskId);
   const fileName = `${key || 'baseState'}.json`;
   const cachePath = path.join(basePath, 'cache', fileName);
   return cachePath;
@@ -50,7 +51,9 @@ const saveTaskDataToCache = async (
     await fs.promises.writeFile(taskCachePath, taskDataString);
   } catch (error) {
     console.error(
-      `Error caching task ${key || 'base state'} for task ${taskId}`,
+      'Error caching task %s for task %s',
+      key || 'base state',
+      taskId,
       error
     );
   }

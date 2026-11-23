@@ -191,17 +191,18 @@ func (rs *ReceiptStore) ListByHeightRange(from, to uint64, limit int) []*TxRecei
 	return out
 }
 
-// Recent returns the last N receipts in insertion order.
+// Recent returns the last N receipts, newest first. It never allocates more
+// than the store holds, whatever n the caller passes.
 func (rs *ReceiptStore) Recent(n int) []*TxReceipt {
 	rs.mu.RLock()
 	defer rs.mu.RUnlock()
 	if n <= 0 || len(rs.order) == 0 {
 		return nil
 	}
-	start := len(rs.order) - n
-	if start < 0 {
-		start = 0
+	if n > len(rs.order) {
+		n = len(rs.order)
 	}
+	start := len(rs.order) - n
 	out := make([]*TxReceipt, 0, n)
 	for i := len(rs.order) - 1; i >= start; i-- {
 		if r, ok := rs.byTxID[rs.order[i]]; ok {

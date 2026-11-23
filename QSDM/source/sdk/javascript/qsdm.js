@@ -723,7 +723,12 @@ class QSDMClient {
         if (typeof baseURL !== 'string' || baseURL.length === 0) {
             throw new Error('QSDMClient: baseURL is required');
         }
-        this.baseURL = baseURL.replace(/\/+$/, '');
+        // Trim trailing slashes in one linear pass. The /\/+$/ regex this
+        // replaces backtracked quadratically on a long run of slashes that
+        // is not at the end of the string.
+        let end = baseURL.length;
+        while (end > 0 && baseURL.charCodeAt(end - 1) === 47 /* '/' */) end -= 1;
+        this.baseURL = baseURL.slice(0, end);
         this.token = null;
         this.apiKey = null;
         this._fetch = opts.fetch || (typeof fetch !== 'undefined' ? fetch : null);
