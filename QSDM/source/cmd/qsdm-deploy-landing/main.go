@@ -17,6 +17,9 @@
 //     key at ~/.ssh/id_ed25519. (Override the host with QSDM_VPS_HOST
 //     and the user with QSDM_VPS_USER; the defaults match
 //     QSDM/deploy/_deploy_host.py for parity with the existing scripts.)
+//     The VPS host key must already be in a known_hosts file (-known-hosts,
+//     else QSDM_SSH_KNOWN_HOSTS, else ~/.ssh/known_hosts): an unknown host
+//     or a changed key ends the run before anything is sent.
 //  2. Run each `--pre-run` shell snippet on the remote *first*. This
 //     is for commands that must happen before uploads land — typically
 //     backups (`cp /var/www/qsdm/index.html /root/backups/index.html.bak`).
@@ -64,6 +67,7 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"flag"
 	"fmt"
@@ -76,6 +80,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
 )
 
 // fileMappings is a flag.Var-compatible accumulator for repeated
@@ -118,17 +123,19 @@ func (r *runList) Set(s string) error {
 
 func main() {
 	var (
-		host       string
-		user_      string
-		keyPath    string
-		timeoutStr string
-		files      fileMappings
-		preRuns    runList
-		runs       runList
+		host           string
+		user_          string
+		keyPath        string
+		knownHostsPath string
+		timeoutStr     string
+		files          fileMappings
+		preRuns        runList
+		runs           runList
 	)
 	flag.StringVar(&host, "host", envDefault("QSDM_VPS_HOST", "206.189.132.232"), "remote host (env QSDM_VPS_HOST)")
 	flag.StringVar(&user_, "user", envDefault("QSDM_VPS_USER", "root"), "remote SSH user (env QSDM_VPS_USER)")
 	flag.StringVar(&keyPath, "key", defaultKeyPath(), "path to OpenSSH private key (ed25519 expected)")
+	flag.StringVar(&knownHostsPath, "known-hosts", envDefault("QSDM_SSH_KNOWN_HOSTS", defaultKnownHostsPath()), "known_hosts file that pins the VPS host key (env QSDM_SSH_KNOWN_HOSTS); unknown hosts are refused")
 	flag.StringVar(&timeoutStr, "timeout", "30s", "TCP dial + per-step SSH timeout")
 	flag.Var(&files, "file", "LOCAL=REMOTE file to upload (repeat for multiple)")
 	flag.Var(&preRuns, "pre-run", "shell command to run on the remote BEFORE uploads (repeat for multiple; typically backups)")
@@ -159,30 +166,23 @@ func main() {
 		os.Exit(1)
 	}
 
-	cfg := &ssh.ClientConfig{
-		User:            user_,
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(), // see note below
-		Timeout:         timeout,
+	addr := net.JoinHostPort(host, "22")
+	hostKeyCallback, hostKeyAlgorithms, err := pinnedHostKey(knownHostsPath, addr)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
-	// HostKeyCallback note: we use InsecureIgnoreHostKey because:
-	//  (a) the deployed Caddy is the source of truth for HTTPS — we
-	//      are not protecting against a MITM that controls the
-	//      network between this workstation and the VPS for SSH
-	//      uploads, since that attacker would already control the
-	//      DNS records you point at the VPS.
-	//  (b) The historical paramiko deploy scripts do the same
-	//      (AutoAddPolicy / no host-key check). Keeping parity
-	//      avoids a "this tool prompts but the old ones didn't"
-	//      gotcha.
-	// A future hardening step is to bake the VPS host key fingerprint
-	// into _deploy_host.py / this file. Out of scope for the wallet
-	// deploy.
+	cfg := &ssh.ClientConfig{
+		User:              user_,
+		Auth:              []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		HostKeyCallback:   hostKeyCallback,
+		HostKeyAlgorithms: hostKeyAlgorithms,
+		Timeout:           timeout,
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	addr := net.JoinHostPort(host, "22")
 	fmt.Fprintf(os.Stderr, "[ssh] dialing %s@%s …\n", user_, addr)
 	d := &net.Dialer{Timeout: timeout}
 	tcp, err := d.DialContext(ctx, "tcp", addr)
@@ -319,6 +319,79 @@ func runRemote(client *ssh.Client, command string) error {
 		return err
 	}
 	return nil
+}
+
+const pinHostKeyHint = "  pin the VPS host key first: ssh to it once and check the fingerprint, or run ssh-keyscan and check the fingerprint before saving it"
+
+// pinnedHostKey returns a host key check against the known_hosts file at
+// path, and the key algorithms that file lists for addr (so the handshake
+// asks for a key type the file can check). This tool uploads files and runs
+// commands as root, so a host that is not in the file, or whose key differs,
+// is refused before anything is sent.
+func pinnedHostKey(path, addr string) (ssh.HostKeyCallback, []string, error) {
+	if path == "" {
+		return nil, nil, errors.New("no known_hosts file: pass -known-hosts or set QSDM_SSH_KNOWN_HOSTS\n" + pinHostKeyHint)
+	}
+	check, err := knownhosts.New(path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("known_hosts %s: %v\n%s", path, err, pinHostKeyHint)
+	}
+	algorithms, known := knownHostKeyAlgorithms(check, addr)
+	if !known {
+		return nil, nil, fmt.Errorf("%s is not in %s; refusing an unknown host\n%s", knownhosts.Normalize(addr), path, pinHostKeyHint)
+	}
+	callback := func(hostname string, remote net.Addr, key ssh.PublicKey) error {
+		err := check(hostname, remote, key)
+		var keyErr *knownhosts.KeyError
+		if errors.As(err, &keyErr) {
+			return fmt.Errorf("the SSH host key of %s does not match %s; refusing to connect (the host was replaced or the connection is intercepted)", hostname, path)
+		}
+		return err
+	}
+	return callback, algorithms, nil
+}
+
+// knownHostKeyAlgorithms lists the host key algorithms for the keys that the
+// known_hosts check holds for addr, in file order. It asks the check about a
+// key that cannot match: the KeyError lists the keys on file. known is false
+// when the file has no key for addr.
+func knownHostKeyAlgorithms(check ssh.HostKeyCallback, addr string) (algorithms []string, known bool) {
+	probe, err := ssh.NewPublicKey(ed25519.PublicKey(make([]byte, ed25519.PublicKeySize)))
+	if err != nil {
+		return nil, false
+	}
+	var keyErr *knownhosts.KeyError
+	if !errors.As(check(addr, &net.TCPAddr{IP: net.IPv4zero, Port: 22}, probe), &keyErr) || len(keyErr.Want) == 0 {
+		return nil, false
+	}
+	seen := map[string]bool{}
+	for _, want := range keyErr.Want {
+		names := []string{want.Key.Type()}
+		switch want.Key.Type() {
+		case ssh.KeyAlgoRSA:
+			names = []string{ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256}
+		case ssh.KeyAlgoED25519, ssh.KeyAlgoECDSA256, ssh.KeyAlgoECDSA384, ssh.KeyAlgoECDSA521:
+		default:
+			continue
+		}
+		for _, name := range names {
+			if !seen[name] {
+				seen[name] = true
+				algorithms = append(algorithms, name)
+			}
+		}
+	}
+	return algorithms, true
+}
+
+// defaultKnownHostsPath returns ~/.ssh/known_hosts ("" when the home folder
+// is unknown).
+func defaultKnownHostsPath() string {
+	cur, err := user.Current()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(cur.HomeDir, ".ssh", "known_hosts")
 }
 
 func envDefault(envKey, fallback string) string {
