@@ -1,3 +1,12 @@
+## [1.4.27]
+
+- Tasks: Hive starts a task only when the QSDM task catalog lists it, and then builds the task's runner itself. It never downloads task code: there is no fallback to a `main.js` from IPFS or Arweave. The runner is built again on every start, so an old file in `executables/` never runs. When the catalog cannot be read, the start stops with "The QSDM task catalog is unavailable; try again."; a task the catalog does not list stops with "This task is not in the QSDM catalog." (#263).
+- Task files: a task ID, program ID or metadata ID from the network becomes a file or folder name only when it is one plain name, and every path built from it must stay inside its folder. This covers the task's runner, its folder and log, the task and metadata caches, the log folder Hive opens, the folder removed when a task is archived and the migration folder (#263).
+- Task thumbnails: Hive fetches them only over HTTPS, with certificate checks on, and a redirect may not leave HTTPS. A download stops after 15 seconds or 5 MiB (#263).
+- Connected sites: an error reply from the Hive wallet to a web page no longer contains local file paths (they read `<path>`) and is at most 300 characters long. Hive's own log keeps the full error (#263).
+- Libraries: Electron 43.8.12 (was 43.1.1), axios 1.21.1, DOMPurify 3.4.18, React Router 6.30.6, js-yaml 4.3.2, ip-address 10.7.6, basic-ftp 6.2.6 and other updates. Express 4.22.3 is now a declared dependency of Hive's main process (#265).
+- Native programs: `qsdmcli` and the miner are built from this release's source; the wallet host, the CUDA solver and the Edge programs (1.3.7) are the same files as in Hive 1.4.26.
+
 ## [1.4.26]
 
 - Wallet switch: after a switch, Hive never shows or sends with the previous wallet. Balances are kept per address, and every wallet screen reloads when the active wallet changes. Each send carries the address the screen showed. If the active wallet changed, Hive refuses the send with "The active wallet changed. Check the amount and send again." Switching is refused while a send is in progress (#254).
