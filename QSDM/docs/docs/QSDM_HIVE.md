@@ -26,9 +26,9 @@ do not hold a user wallet.
   `https://qsdm.tech/downloads/hive-v2/`, and its release records are signed
   with QSDM's v2 release key. The earlier release key was rotated in October
   2026.
-- Hive 1.4.26 for macOS 12 or newer (one app for Apple silicon and Intel) was
-  published on 22 November 2026 as the GitHub release
-  [`hive-macos-v1.4.26`](https://github.com/qsdm-tech/QSDM/releases/tag/hive-macos-v1.4.26).
+- Hive 1.4.27 for macOS 12 or newer (one app for Apple silicon and Intel) was
+  published on 23 November 2026 as the GitHub release
+  [`hive-macos-v1.4.27`](https://github.com/qsdm-tech/QSDM/releases/tag/hive-macos-v1.4.27).
   It is signed with QSDM's Apple Developer ID and notarized by Apple. On a Mac,
   Hive is the wallet and runs tasks; it does not mine. See [macOS](#macos).
 - Because of the key rotation, Hive 1.4.20 (Windows) and 1.4.17 (Linux) cannot
@@ -139,7 +139,7 @@ creating a second stake or transfer.
 Hive for macOS needs macOS 12 (Monterey) or newer. One app runs on Apple
 silicon and Intel Macs. Download the `.dmg` from the
 [download page](https://qsdm.tech/download.html) or the GitHub release
-[`hive-macos-v1.4.26`](https://github.com/qsdm-tech/QSDM/releases/tag/hive-macos-v1.4.26),
+[`hive-macos-v1.4.27`](https://github.com/qsdm-tech/QSDM/releases/tag/hive-macos-v1.4.27),
 open it and drag **QSDM Hive** to **Applications**. The app is signed with
 QSDM's Apple Developer ID (team `2YUCLJRGYL`) and notarized by Apple, so it opens
 with a double-click. Check the file first as described in
