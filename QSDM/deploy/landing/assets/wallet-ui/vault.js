@@ -22,10 +22,29 @@
   const $ = (id) => document.getElementById(id);
   function show(el, on) { if (el) el.hidden = !on; }
   function setText(el, t) { if (el) el.textContent = t; }
+  // Status lines are plain text: messages carry keystore fields, API
+  // replies and the user's own input, so they never go through innerHTML.
   function setStatus(elId, msg, cls) {
     const el = $(elId);
     if (!el) return;
-    el.innerHTML = cls ? `<span class="${cls}">${msg}</span>` : msg;
+    el.textContent = '';
+    if (cls) {
+      const span = document.createElement('span');
+      span.className = cls;
+      span.textContent = msg;
+      el.appendChild(span);
+    } else {
+      el.textContent = msg;
+    }
+  }
+  function setStatusBusy(elId, msg) {
+    const el = $(elId);
+    if (!el) return;
+    const spinner = document.createElement('span');
+    spinner.className = 'spinner';
+    el.textContent = '';
+    el.appendChild(spinner);
+    el.appendChild(document.createTextNode(msg));
   }
 
   // ----- localStorage keys -----
@@ -263,7 +282,7 @@
         setStatus('vault-create-status', 'Passphrases do not match.', 'err');
         return;
       }
-      setStatus('vault-create-status', '<span class="spinner"></span>Generating ML-DSA-87 keypair…');
+      setStatusBusy('vault-create-status', 'Generating ML-DSA-87 keypair…');
       try {
         const gen = window.qsdm_wallet_generate();
         if (typeof gen !== 'object' || !gen.public_key_hex || !gen.private_key_hex) {
@@ -329,7 +348,7 @@
         setStatus('vault-unlock-status', 'Enter your passphrase.', 'err');
         return;
       }
-      setStatus('vault-unlock-status', '<span class="spinner"></span>Decrypting…');
+      setStatusBusy('vault-unlock-status', 'Decrypting…');
       try {
         const priv = await QW.decryptPrivateKey(ks, pass);
         session.address      = ks.address;
@@ -386,7 +405,7 @@
         setStatus('vault-send-status', 'Fee must be ≥ 0 CELL.', 'err');
         return;
       }
-      setStatus('vault-send-status', '<span class="spinner"></span>Fetching nonce…');
+      setStatusBusy('vault-send-status', 'Fetching nonce…');
       // Get nonce (best-effort; validator endpoint).
       let nonce = 0;
       try {
@@ -420,7 +439,7 @@
       // transactions, fetched after the review so they are as fresh as
       // possible (the signature covers them). [] if the validator cannot
       // supply them, which validators accept only before PoE activation.
-      setStatus('vault-send-status', '<span class="spinner"></span>Fetching proof-of-entanglement parents…');
+      setStatusBusy('vault-send-status', 'Fetching proof-of-entanglement parents…');
       const parentCells = (QW.fetchPoEParents)
         ? await QW.fetchPoEParents('https://api.qsdm.tech/api/v1/wallet/submit-signed')
         : [];
@@ -428,7 +447,7 @@
         setStatus('vault-send-status', 'The wallet locked before signing. Unlock and try again; nothing was sent.', 'warn');
         return;
       }
-      setStatus('vault-send-status', '<span class="spinner"></span>Signing…');
+      setStatusBusy('vault-send-status', 'Signing…');
       // Build canonical envelope (same shape the existing Send tab uses).
       const timestamp = new Date().toISOString();
       const txID = (function () {
@@ -458,7 +477,7 @@
         setStatus('vault-send-status', 'Sign failed: ' + (signed && signed.error ? signed.error : 'unknown'), 'err');
         return;
       }
-      setStatus('vault-send-status', '<span class="spinner"></span>Submitting…');
+      setStatusBusy('vault-send-status', 'Submitting…');
       let resp, body;
       try {
         resp = await fetch('https://api.qsdm.tech/api/v1/wallet/submit-signed', {

@@ -55,15 +55,29 @@
 
   // ----- DOM helpers -----
   const $ = (id) => document.getElementById(id);
+  // Status lines are plain text: messages carry keystore fields, API
+  // replies and the user's own input, so they never go through innerHTML.
   function setStatus(elId, msg, cls) {
     const el = $(elId);
     if (!el) return;
-    el.innerHTML = cls ? `<span class="${cls}">${msg}</span>` : msg;
+    el.textContent = '';
+    if (cls) {
+      const span = document.createElement('span');
+      span.className = cls;
+      span.textContent = msg;
+      el.appendChild(span);
+    } else {
+      el.textContent = msg;
+    }
   }
   function setStatusBusy(elId, msg) {
     const el = $(elId);
     if (!el) return;
-    el.innerHTML = `<span class="spinner"></span>${msg}`;
+    const spinner = document.createElement('span');
+    spinner.className = 'spinner';
+    el.textContent = '';
+    el.appendChild(spinner);
+    el.appendChild(document.createTextNode(msg));
   }
 
   // ----- hex helpers -----
