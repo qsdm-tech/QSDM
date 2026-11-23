@@ -12,8 +12,8 @@ All downloads are linked from **[qsdm.tech/download.html](https://qsdm.tech/down
 | QSDM Hive | 1.4.27 | Windows x64 | `qsdm-hive-1.4.27-win-x64.exe` | 133.7 MB | `99b6d29cb3ea3aa3e2b06a2e6299d1c9ec1866f242d54d8cfc79e60db653b387` |
 | QSDM Hive | 1.4.27 | Linux x86-64 | `qsdm-hive-1.4.27-linux-x86_64.AppImage` | 169.2 MB | `b1cbda7ae585b37598c38944c596f83f2a5d8c570b39c21c63e4e1fb6c838c72` |
 | QSDM Hive | 1.4.27 | Linux x86-64 | `qsdm-hive-1.4.27-linux-x64.tar.gz` | 160.1 MB | `5b8173fb81a888a9d69b45edf1b93b576665475acb1ea9dd1097359462062528` |
-| QSDM Hive | 1.4.26 | macOS 12+ (Apple silicon and Intel) | `qsdm-hive-1.4.26-mac-universal.dmg` | 244.2 MB | `1af056bf109b2977186324924f79de55a5e0b37495fff0b10e36ea91fa410f38` |
-| QSDM Hive | 1.4.26 | macOS 12+ (Apple silicon and Intel) | `qsdm-hive-1.4.26-mac-universal.zip` | 243.6 MB | `c064f9d494982bd55efbb404259d24533c27ab7d6797740968a5d3e2d27d5417` |
+| QSDM Hive | 1.4.27 | macOS 12+ (Apple silicon and Intel) | `qsdm-hive-1.4.27-mac-universal.dmg` | 250.1 MB | `679f0220d65e19089caacbd5a3c222f16b336eb754bdbc3b3b8ec9ec06f802ac` |
+| QSDM Hive | 1.4.27 | macOS 12+ (Apple silicon and Intel) | `qsdm-hive-1.4.27-mac-universal.zip` | 249.6 MB | `a1dd876013be5bb00a355472d1a926dd4b41f0f7f6b95d0752bec484ee9619c7` |
 
 Hive 1.4.27 (published 23 November 2026) is served from the release channel
 `https://qsdm.tech/downloads/hive-v2/`, together with checksum files
@@ -21,8 +21,8 @@ Hive 1.4.27 (published 23 November 2026) is served from the release channel
 release manifests (`qsdm-hive-release-windows-v2.json`,
 `qsdm-hive-release-linux-v2.json`).
 
-Hive 1.4.26 for macOS (published 22 November 2026) is the GitHub release
-[`hive-macos-v1.4.26`](https://github.com/qsdm-tech/QSDM/releases/tag/hive-macos-v1.4.26),
+Hive 1.4.27 for macOS (published 23 November 2026) is the GitHub release
+[`hive-macos-v1.4.27`](https://github.com/qsdm-tech/QSDM/releases/tag/hive-macos-v1.4.27),
 with the checksum file `SHA256SUMS-mac.txt`. It is signed with QSDM's Apple
 Developer ID (team `2YUCLJRGYL`) and notarized by Apple. It has no QSDM-native
 release manifest: macOS checks the Apple signature and the notarization when
@@ -74,7 +74,7 @@ sha256sum -c --ignore-missing qsdm-hive-1.4.27-linux-SHA256SUMS.txt
 **macOS (Terminal):**
 
 ```bash
-shasum -a 256 qsdm-hive-1.4.26-mac-universal.dmg
+shasum -a 256 qsdm-hive-1.4.27-mac-universal.dmg
 ```
 
 ## What Hive checks for you
