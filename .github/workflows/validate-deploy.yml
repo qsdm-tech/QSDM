@@ -32,6 +32,11 @@ on:
       - "QSDM/source/go.sum"
   workflow_dispatch:
 
+# The jobs only check out the repository and run linters, so the token
+# needs read access to the contents and nothing else.
+permissions:
+  contents: read
+
 concurrency:
   group: validate-deploy-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
