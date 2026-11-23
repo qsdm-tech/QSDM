@@ -85,11 +85,14 @@ import {
   getMainSystemAccountKeypair,
   getStakingAccountKeypair,
 } from '../node/helpers';
-import { getAppDataPath } from '../node/helpers/getAppDataPath';
+import {
+  getTaskExecutablePath,
+  getTaskNamespacePath,
+} from '../node/helpers/taskPaths';
 import initExpressApp from '../node/initExpressApp';
 
 import getStakingAccountPublicKey from './getStakingAccountPubKey';
-import { getTaskSource } from './getTaskSource';
+import { loadTask } from './loadTask';
 import retryTask from './retryTask';
 import storeUserConfig from './storeUserConfig';
 import { getMyTaskStake } from './tasks';
@@ -580,75 +583,6 @@ export async function clearTaskRetryTimeout(taskPubkey: string) {
 }
 
 /**
- * Load tasks and generate task executables
- * @param {any[]} selectedTasks Array of selected tasks
- * @param {any} expressApp
- * @returns {any[]} Array of executable tasks
- */
-// bafybeiabhpqrknrzz5fka2otptaw7lubz7awh5f7n2kruk52akq4jr5dh4
-export async function loadTask({
-  taskAuditProgram,
-  taskId,
-}: {
-  taskAuditProgram: string;
-  taskId: string;
-}) {
-  const executablesDirectoryPath = `${getAppDataPath()}/executables`;
-  const presumedSourceCodePath = `${executablesDirectoryPath}/${taskAuditProgram}.js`;
-  let shouldDownloadExecutable = !fsSync.existsSync(presumedSourceCodePath);
-
-  if (!shouldDownloadExecutable) {
-    const fileContent = fsSync.readFileSync(presumedSourceCodePath, 'utf8');
-    shouldDownloadExecutable = fileContent.startsWith('<');
-  }
-
-  /**
-   * 1.  start node
-   * 2. Check the executable folders, and there is a file with task_audit_prgram name
-   * 3. If task with this task_audit_prgram is not hashed, force download and alternate malicious executable code
-   */
-
-  if (shouldDownloadExecutable) {
-    const sourceCode: string = await getTaskSource({} as Event, {
-      taskAuditProgram,
-    });
-    /**
-     * @dev save record in task_id -> taskAuditProgram map in db fpr the first time when task is loaded
-     * it will be used for tracking the task and its executable
-     */
-    await saveTaskAuditProgramIdToTaskIdMap(taskId, taskAuditProgram);
-    fsSync.mkdirSync(executablesDirectoryPath, { recursive: true });
-    fsSync.writeFileSync(presumedSourceCodePath, sourceCode);
-  }
-}
-
-async function saveTaskAuditProgramIdToTaskIdMap(
-  taskId: string,
-  taskAuditProgram: string
-) {
-  let currentMap: Record<string, string>;
-
-  try {
-    const currentMapString = await db.get(
-      SystemDbKeys.TaskIdToAuditProgramIdMap
-    );
-    currentMap = JSON.parse(currentMapString as string) as Record<
-      string,
-      string
-    >;
-  } catch (error) {
-    currentMap = {};
-  }
-
-  currentMap[taskAuditProgram] = taskId;
-
-  await db.put(
-    SystemDbKeys.TaskIdToAuditProgramIdMap,
-    JSON.stringify(currentMap)
-  );
-}
-
-/**
  * Initializes and executes tasks
  * @param {any[]} selectedTask Array of selected tasks
  * @param {any[]} executableTasks Array of executable tasks
@@ -667,6 +601,12 @@ export async function executeTasks(
   expressAppPort: number;
   secret: string;
 }> {
+  // Both names come from the task data: refuse anything but a plain name
+  // before a folder is made or a process is started.
+  const taskNamespacePath = getTaskNamespacePath(selectedTask.task_id);
+  const taskExecutablePath = getTaskExecutablePath(
+    selectedTask.task_audit_program
+  );
   const availablePort = await detectPort();
 
   const secret = cryptoRandomString({ length: 20 });
@@ -684,7 +624,7 @@ export async function executeTasks(
       ? getQsdmTaskActionSender() || 'qsdm'
       : await getStakingAccountPublicKey();
   const STAKE = selectedTask.stake_list[stakingAccPubkey];
-  fsSync.mkdirSync(`${getAppDataPath()}/namespace/${selectedTask.task_id}`, {
+  fsSync.mkdirSync(taskNamespacePath, {
     recursive: true,
   });
   let logFile;
@@ -692,7 +632,7 @@ export async function executeTasks(
     logFile = rfs.createStream('task.log', {
       size: '5M', // Maximum file size
       compress: 'gzip', // Compress rotated files using gzip
-      path: `${getAppDataPath()}/namespace/${selectedTask.task_id}`, // Directory path for log files
+      path: taskNamespacePath, // Directory path for log files
     });
 
     // Event listener for the rotation event
@@ -715,7 +655,7 @@ export async function executeTasks(
     console.error('ERROR IN TASK LOG', error);
   }
   const childTaskProcess = fork(
-    `${getAppDataPath()}/executables/${selectedTask.task_audit_program}.js`,
+    taskExecutablePath,
     [
       `${selectedTask.task_name}`,
       `${selectedTask.task_id}`,

@@ -60,6 +60,7 @@ import {
 import { SystemDbKeys } from '../../config/systemDbKeys';
 import { getAppDataPath } from '../node/helpers/getAppDataPath';
 import { Namespace, namespaceInstance } from '../node/helpers/Namespace';
+import { getTaskNamespacePath } from '../node/helpers/taskPaths';
 
 import { K2TasksDataFetchOptions } from './QsdmHiveTaskService/types';
 import { submitQsdmTaskActionIntent } from './qsdmTaskActions';
@@ -1649,6 +1650,9 @@ export class QsdmHiveTaskService {
   }
 
   removeTaskFromStartedTasks(taskPubKey: string) {
+    // Refuse an id that is not a plain name before anything is removed.
+    const taskNamespacePath = getTaskNamespacePath(taskPubKey);
+
     // if is running, stop it
     if (this.RUNNING_TASKS[taskPubKey]) {
       this.RUNNING_TASKS[taskPubKey].child.kill();
@@ -1661,7 +1665,7 @@ export class QsdmHiveTaskService {
     );
 
     // remove from filesystem
-    fs.rmdirSync(`${getAppDataPath()}/namespace/${taskPubKey}`, {
+    fs.rmdirSync(taskNamespacePath, {
       recursive: true,
     });
   }

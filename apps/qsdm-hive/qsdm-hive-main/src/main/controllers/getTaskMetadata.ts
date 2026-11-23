@@ -3,6 +3,7 @@ import { promises as fsPromises } from 'fs';
 
 import { buildQsdmTaskReadUrls, QSDM_TASK_RUNTIME_MODE } from 'config/qsdm';
 import { getAppDataPath } from 'main/node/helpers/getAppDataPath';
+import { isSafeTaskId } from 'main/node/helpers/taskPaths';
 import {
   getQsdmSystemTaskMetadata,
   mergeQsdmSystemTasks,
@@ -75,16 +76,26 @@ export const getTaskMetadata = async (
     });
   }
 
-  const cacheFilePath = `${METADATA_CACHE_DIR}/${payload.metadataCID}.json`;
+  // The metadata id comes from the task data. Only a plain name (one path
+  // segment) is used as a cache file name; anything else (a metadata URL, for
+  // example) is not cached.
+  const cacheFilePath = isSafeTaskId(payload.metadataCID)
+    ? `${METADATA_CACHE_DIR}/${payload.metadataCID}.json`
+    : null;
 
   try {
     await mkdir(METADATA_CACHE_DIR, { recursive: true });
     const nativeMetadata = await getQsdmNativeTaskMetadata(payload.metadataCID);
     if (nativeMetadata) {
-      await writeFile(cacheFilePath, JSON.stringify(nativeMetadata), 'utf-8');
+      if (cacheFilePath) {
+        await writeFile(cacheFilePath, JSON.stringify(nativeMetadata), 'utf-8');
+      }
       return nativeMetadata;
     }
 
+    if (!cacheFilePath) {
+      throw new Error('No cached metadata for this task.');
+    }
     await access(cacheFilePath);
 
     // If cache exists, read and return its content
@@ -114,7 +125,9 @@ export const getTaskMetadata = async (
         throw new Error('Metadata was not correctly fetched');
       }
 
-      await writeFile(cacheFilePath, JSON.stringify(metadata), 'utf-8');
+      if (cacheFilePath) {
+        await writeFile(cacheFilePath, JSON.stringify(metadata), 'utf-8');
+      }
       return metadata;
     } catch (e: any) {
       console.error(e);
