@@ -84,7 +84,7 @@ REAL_INSTALL=$(command -v install)
 REAL_ID=$(command -v id)
 REAL_DF=$(command -v df)
 export REAL_CURL REAL_INSTALL REAL_ID REAL_DF
-export SHIM_LOG=$T/shim.log SHIM_STATE=$T/shim-state TEST_CONTROL=$T/control
+export SHIM_LOG=$T/shim.log SHIM_STATE=$T/shim-state TEST_CONTROL=$T/control SHIM_ROOT=$T/no-root
 
 shim() {
   cat >"$T/shims/$1"
@@ -167,27 +167,48 @@ SH
 shim systemctl <<'SH'
 #!/usr/bin/env bash
 printf 'systemctl %s\n' "$*" >>"$SHIM_LOG"
+# chain_short: the node's chain (control/local-tip, when set) ends below the last hand-over block of the
+# installed core.toml's schedule, so the real node refuses to start (exit 78), as PRODUCER_TRANSITION.md says.
+chain_short() {
+  local conf=$SHIM_ROOT/etc/qsdm-follower/core.toml tip final
+  [[ -f $TEST_CONTROL/local-tip && -f $conf ]] || return 1
+  tip=$(tr -d '\r\n' <"$TEST_CONTROL/local-tip")
+  final=$(awk '/^\[/ { table = $0 }
+    table ~ /^\[\[?consensus\.producer_transition/ && /^from_height = / { v = $3 - 1 }
+    table == "[consensus.producer_transition]" && /^checkpoint_height = / { v = $3 }
+    END { print v + 0 }' "$conf")
+  ((final > tip))
+}
+# start_node: start the node as systemd does; with fail-next-restart or a chain that is too short, the start
+# fails as a node that refuses its configuration: systemd marks the service failed and its API stops answering.
+start_node() {
+  if [[ -f $SHIM_STATE/fail-next-restart ]] || chain_short; then
+    rm -f "$SHIM_STATE/fail-next-restart" "$SHIM_STATE/active"
+    touch "$SHIM_STATE/failed" "$TEST_CONTROL/local-down"
+  else
+    rm -f "$SHIM_STATE/failed" "$TEST_CONTROL/local-down"
+    touch "$SHIM_STATE/active"
+  fi
+}
 case ${1:-} in
   daemon-reload) ;;
   enable)
-    if [[ ${2:-} == --now ]]; then
-      touch "$SHIM_STATE/active"
+    if [[ ${2:-} == --now && ${3:-} == qsdm-follower ]]; then
+      # A first start (local-down, when set, stays: a node still loading its chain).
+      if chain_short; then
+        start_node
+      else
+        touch "$SHIM_STATE/active"
+      fi
+    elif [[ ${2:-} == --now ]]; then
+      touch "$SHIM_STATE/enabled-${3:-}"
     fi
     ;;
+  disable) rm -f "$SHIM_STATE/enabled-${3:-}" ;;
   is-active) [[ -f $SHIM_STATE/active ]] || exit 3 ;;
   is-failed) [[ -f $SHIM_STATE/failed ]] || exit 1 ;;
   stop) rm -f "$SHIM_STATE/active" ;;
-  restart)
-    # With fail-next-restart, this start fails as a node that refuses its configuration does: systemd marks
-    # the service failed and its API stops answering. The next restart works again.
-    if [[ -f $SHIM_STATE/fail-next-restart ]]; then
-      rm -f "$SHIM_STATE/fail-next-restart" "$SHIM_STATE/active"
-      touch "$SHIM_STATE/failed" "$TEST_CONTROL/local-down"
-    else
-      rm -f "$SHIM_STATE/failed" "$TEST_CONTROL/local-down"
-      touch "$SHIM_STATE/active"
-    fi
-    ;;
+  restart) start_node ;;
   *)
     echo "systemctl stand-in: unexpected arguments: $*" >&2
     exit 2
@@ -518,13 +539,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 if side == "public" and rest == "/status" and take("public-status-503"):
                     return self.send_json(503, {"status": "temporarily_unavailable",
                                                 "message": "QSDM services are being migrated. Please try again later."})
+                tip = TIP
+                if side == "local" and flag("local-tip"):
+                    # control/local-tip: the installed node's chain ends there (a node still catching up)
+                    with open(os.path.join(control, "local-tip"), encoding="utf-8") as f:
+                        tip = int(f.read().strip())
                 if rest == "/status":
-                    return self.send_json(200, {"chain_tip": TIP, "node_role": "validator"})
+                    return self.send_json(200, {"chain_tip": tip, "node_role": "validator"})
                 if rest == "/chain/blocks":
                     query = urllib.parse.parse_qs(url.query)
                     first, last = int(query["from"][0]), int(query["to"][0])
-                    blocks = [block(h, side) for h in range(first, min(last, TIP) + 1)]
-                    return self.send_json(200, {"blocks": blocks, "from": first, "to": last, "tip": TIP})
+                    blocks = [block(h, side) for h in range(first, min(last, tip) + 1)]
+                    return self.send_json(200, {"blocks": blocks, "from": first, "to": last, "tip": tip})
                 return self.send_json(404, {"error": "not found"})
         return super().do_GET()
 
@@ -821,6 +847,8 @@ sandbox() {
   ROOT=$dir/root
   WORKD=$dir/work
   SHIM_STATE=$dir/state
+  SHIM_ROOT=$ROOT
+  rm -f -- "$T/control/local-tip"
 }
 
 # local_args VARIANT: the sandbox and local-server options most cases use.
@@ -1289,30 +1317,58 @@ finish
 
 # --- When the block maker changes (RUN_A_FULL_NODE.md): the schedule on the page, and --update-schedule -------
 
-begin sched-install "a fresh install from a page that shows a new block maker: core.toml carries the page's schedule"
+step_files() { # step_files: the timer and its service are installed
+  [[ -f $ROOT/etc/systemd/system/qsdm-follower-schedule.service && -f $ROOT/etc/systemd/system/qsdm-follower-schedule.timer ]]
+}
+no_step_files() { missing "$ROOT/etc/systemd/system/qsdm-follower-schedule.service" && missing "$ROOT/etc/systemd/system/qsdm-follower-schedule.timer"; }
+timer_on() { [[ -f $SHIM_STATE/enabled-qsdm-follower-schedule.timer ]]; }
+
+begin sched-install "a fresh install from a page whose block maker changed after the snapshot: the release's schedule first, the rest by the timer"
 sandbox sched
 local_args good
 run sched-install "${LOCAL[@]}" --from-website --website-url "$BASE/site/sched-one.html"
 expect "exits 0" rc_is 0
 expect "says where the block makers come from" says "the schedule from $BASE/site/sched-one.html"
 expect "lists the new block maker" says "block maker 2 from 1201 $JAPAN after block 1200 $(sha block-1200)"
-expect "says it continues the release's schedule" \
-  says "ok: it continues the release's schedule with 1 more block maker(s); core.toml will carry it"
-expect "installs core.toml with mode 0640, root:qsdm-follower" \
-  logged_re "^install -m 0640 -o root -g qsdm-follower .*/core.toml $ROOT/etc/qsdm-follower/core.toml\$"
+expect "says the release's file carries the schedule up to the snapshot" \
+  says "ok: the release's fullnode-core.toml carries this schedule up to the snapshot (block $M)"
+expect "says why the rest waits" says "note: the snapshot (block $M) is older than block 1200, where the schedule hands over to its next block maker"
+expect "core.toml is the release's fullnode-core.toml (the snapshot's block makers)" \
+  same_file "$ROOT/etc/qsdm-follower/core.toml" "$GOOD/fullnode-core.toml"
+expect "starts the node" logged "systemctl enable --now qsdm-follower"
+expect "keeps the page's schedule" same_file "$ROOT/etc/qsdm-follower/producer-schedule.toml" "$T/fixtures/schedule-one.toml"
+expect "keeps a copy of the installer for the timer" same_file "$ROOT/opt/qsdm-follower/install-full-node.sh" "$INSTALLER"
+expect "installs the timer and its service" step_files
+expect "  whose service runs the copy with --continue-schedule" \
+  grep -Fxq "ExecStart=/bin/bash /opt/qsdm-follower/install-full-node.sh --continue-schedule --api $BASE/public/api/v1 --work-dir $WORKD --wait-minutes 10" \
+  "$ROOT/etc/systemd/system/qsdm-follower-schedule.service"
+expect "enables the timer" logged "systemctl enable --now qsdm-follower-schedule.timer"
+expect "checks it against the network" says "ok: your node is at block $TIP"
+expect "the summary names the timer" says "qsdm-follower-schedule.timer adds the other"
+finish
+
+begin sched-continue "the timer's run: the node's chain has the hand-over block, so the next block maker goes in"
+run sched-continue "${LOCAL[@]}" --continue-schedule
+expect "exits 0" rc_is 0
+expect "reads the node's chain" says "your node's chain ends at block $TIP"
+expect "says what it adds" says "ok: it continues this node's schedule with 1 more block maker(s), the first from block 1201"
 expect "core.toml carries the page's schedule" \
   same_text "$(installed_schedule "$ROOT/etc/qsdm-follower/core.toml")" "$(cat -- "$T/fixtures/schedule-one.toml")"
 expect "  and names the new block maker in authorized_block_producers" \
   grep -Fxq "authorized_block_producers = [\"$JAPAN\"]" "$ROOT/etc/qsdm-follower/core.toml"
 expect "  and nothing else changed" same_outside_schedule "$ROOT/etc/qsdm-follower/core.toml" "$GOOD/fullnode-core.toml"
-expect "starts the node" logged "systemctl enable --now qsdm-follower"
-expect "checks it against the network" says "ok: your node is at block $TIP"
+expect "restarts the node once" restarts_were 1
+expect "every block maker is in: the timer goes" logged "systemctl disable --now qsdm-follower-schedule.timer"
+expect "  and its files" no_step_files
+expect "says it is done" says "Done: the node carries the block-maker schedule kept in /etc/qsdm-follower/producer-schedule.toml."
 finish
 
-begin sched-rerun "the same install again: core.toml is already in place"
+begin sched-rerun "the same install again: core.toml is in place, with the block maker the timer added"
 run sched-rerun "${LOCAL[@]}" --from-website --website-url "$BASE/site/sched-one.html"
 expect "exits 0" rc_is 0
-expect "finds core.toml in place" says "ok: /etc/qsdm-follower/core.toml is already in place"
+expect "finds core.toml in place" \
+  says "ok: /etc/qsdm-follower/core.toml is already in place, with more block makers of this schedule (added since the install)"
+expect "installs no timer again" no_step_files
 finish
 
 begin sched-current "--update-schedule when the node already has the page's schedule: nothing changes"
@@ -1324,13 +1380,25 @@ expect "does not restart the node" restarts_were 0
 expect "still checks the node against the network" says "ok: your node is at block $TIP"
 finish
 
-begin sched-newer-install "the page shows another block maker: a plain re-run of the install says to use --update-schedule"
+begin sched-newer-install "the page shows another block maker: a plain re-run of the install keeps core.toml and leaves the rest to the timer"
 run sched-newer-install "${LOCAL[@]}" --from-website --website-url "$BASE/site/sched-two.html"
+expect "exits 0" rc_is 0
+expect "finds core.toml in place" \
+  says "ok: /etc/qsdm-follower/core.toml is already in place, with more block makers of this schedule (added since the install)"
+expect "does not change core.toml" not logged_re "^install -m 0640 .* $ROOT/etc/qsdm-follower/core.toml\$"
+expect "keeps the newer schedule for the timer" same_file "$ROOT/etc/qsdm-follower/producer-schedule.toml" "$T/fixtures/schedule-two.toml"
+expect "starts the timer" logged "systemctl enable --now qsdm-follower-schedule.timer"
+finish
+
+begin sched-other-config "a core.toml that is not a stage of the page's schedule: the re-run stops"
+cp -- "$ROOT/etc/qsdm-follower/core.toml" "$T/cases/sched-other-before.toml"
+printf '# changed by hand\n' >>"$ROOT/etc/qsdm-follower/core.toml"
+run sched-other-config "${LOCAL[@]}" --from-website --website-url "$BASE/site/sched-two.html"
 expect "exits 1" rc_is 1
 expect "says core.toml differs" \
-  says "STOP: /etc/qsdm-follower/core.toml already exists and is not the release's fullnode-core.toml with the block-maker schedule"
+  says "STOP: /etc/qsdm-follower/core.toml already exists and is not the release's fullnode-core.toml."
 expect "says to run --update-schedule" says "--update-schedule --from-website"
-expect "installs no file" not logged_re '^install -m '
+cp -- "$T/cases/sched-other-before.toml" "$ROOT/etc/qsdm-follower/core.toml"
 finish
 
 begin sched-update "--update-schedule with the page's newer schedule: the old file kept, the new one in, a restart and the check"
@@ -1340,7 +1408,7 @@ expect "exits 0" rc_is 0
 expect "lists the new block maker" says "block maker 3 from 1251 $BACK after block 1250 $(sha block-1250)"
 expect "says what it adds" says "ok: it continues this node's schedule with 1 more block maker(s), the first from block 1251"
 expect "keeps the old file" kept_config
-expect "  byte for byte" same_file "$(compgen -G "$ROOT/etc/qsdm-follower/core.toml.before-*" | head -n 1)" \
+expect "  byte for byte" same_file "$(compgen -G "$ROOT/etc/qsdm-follower/core.toml.before-*" | sort | tail -n 1)" \
   "$T/cases/sched-before.toml"
 expect "core.toml carries the new schedule" \
   same_text "$(installed_schedule "$ROOT/etc/qsdm-follower/core.toml")" "$(cat -- "$T/fixtures/schedule-two.toml")"
@@ -1350,6 +1418,8 @@ expect "  and nothing else changed" same_outside_schedule "$ROOT/etc/qsdm-follow
 expect "restarts the node once" restarts_were 1
 expect "checks it against the network" says "ok: your node is at block $TIP"
 expect "says the node follows the new block maker" says "ok: your node follows the new block maker (block 1251 and later)"
+expect "every block maker is in: the timer the re-run started goes" logged "systemctl disable --now qsdm-follower-schedule.timer"
+expect "  and its files" no_step_files
 expect "says it is done" says "Done: the node carries the block-maker schedule from $BASE/site/sched-two.html."
 finish
 
@@ -1421,6 +1491,136 @@ run sched-no-node "${LOCAL[@]}" --update-schedule --producer-schedule "$T/fixtur
 expect "exits 1" rc_is 1
 expect "says why" says "STOP: This server has no full node set up by this installer"
 expect "nothing under --root" root_untouched
+finish
+
+# --- A node whose chain is behind the schedule's hand-over blocks takes one block maker at a time -----------
+# The systemctl stand-in refuses to start the node when its chain (control/local-tip) ends below the last
+# hand-over block of core.toml's schedule, as the node does (exit 78).
+
+begin step-install "a new node two block makers behind: it starts with the release's schedule, the timer waits"
+sandbox steps
+local_args good
+printf '1100\n' >"$T/control/local-tip"
+run step-install "${LOCAL[@]}" --wait-minutes 0 --from-website --website-url "$BASE/site/sched-two.html"
+expect "exits 0" rc_is 0
+expect "lists both new block makers" says "block maker 3 from 1251 $BACK after block 1250 $(sha block-1250)"
+expect "core.toml is the release's fullnode-core.toml" same_file "$ROOT/etc/qsdm-follower/core.toml" "$GOOD/fullnode-core.toml"
+expect "the node starts (its chain reaches the release's hand-over block)" not exists "$SHIM_STATE/failed"
+expect "keeps the page's schedule" same_file "$ROOT/etc/qsdm-follower/producer-schedule.toml" "$T/fixtures/schedule-two.toml"
+expect "starts the timer" timer_on
+expect "says what the timer does next" says "adds the other 2 block maker(s) of the schedule kept in /etc/qsdm-follower/producer-schedule.toml, the next when your node has block 1200"
+finish
+
+begin step-wait "the timer's run before the hand-over block: nothing changes"
+run step-wait "${LOCAL[@]}" --wait-minutes 0 --continue-schedule
+expect "exits 0" rc_is 0
+expect "reads the node's chain" says "your node's chain ends at block 1100"
+expect "says the node waits" says "the next one takes over after block 1200, which your node does not have yet (it waits there)"
+expect "installs nothing" not logged_re '^install '
+expect "does not restart the node" restarts_were 0
+expect "core.toml is still the release's" same_file "$ROOT/etc/qsdm-follower/core.toml" "$GOOD/fullnode-core.toml"
+expect "the timer stays" timer_on
+finish
+
+begin step-one "the node waits at block 1200: the timer adds the second block maker only"
+printf '1200\n' >"$T/control/local-tip"
+run step-one "${LOCAL[@]}" --wait-minutes 0 --continue-schedule
+expect "exits 0" rc_is 0
+expect "says what it adds" says "ok: it continues this node's schedule with 1 more block maker(s), the first from block 1201"
+expect "says one more follows" says "note: 1 more block maker(s) follow when your node has block 1250"
+expect "core.toml carries the first three block makers" \
+  same_text "$(installed_schedule "$ROOT/etc/qsdm-follower/core.toml")" "$(cat -- "$T/fixtures/schedule-one.toml")"
+expect "  and names that block maker in authorized_block_producers" \
+  grep -Fxq "authorized_block_producers = [\"$JAPAN\"]" "$ROOT/etc/qsdm-follower/core.toml"
+expect "restarts the node once, and it starts" restarts_were 1
+expect "  and it starts" not exists "$SHIM_STATE/failed"
+expect "the timer stays" timer_on
+expect "says it is done for now" says "Done for now: the node carries the block-maker schedule kept in /etc/qsdm-follower/producer-schedule.toml as far as its chain reaches."
+finish
+
+begin step-two "the node waits at block 1250: the last block maker goes in and the timer goes"
+printf '1250\n' >"$T/control/local-tip"
+run step-two "${LOCAL[@]}" --wait-minutes 0 --continue-schedule
+expect "exits 0" rc_is 0
+expect "core.toml carries the whole schedule" \
+  same_text "$(installed_schedule "$ROOT/etc/qsdm-follower/core.toml")" "$(cat -- "$T/fixtures/schedule-two.toml")"
+expect "  and names the last block maker" grep -Fxq "authorized_block_producers = [\"$BACK\"]" "$ROOT/etc/qsdm-follower/core.toml"
+expect "  and nothing else changed" same_outside_schedule "$ROOT/etc/qsdm-follower/core.toml" "$GOOD/fullnode-core.toml"
+expect "restarts the node once" restarts_were 1
+expect "  and it starts" not exists "$SHIM_STATE/failed"
+expect "the timer goes" not timer_on
+expect "  and its files" no_step_files
+finish
+
+begin step-after "the timer's run once every block maker is in: nothing to do"
+run step-after "${LOCAL[@]}" --wait-minutes 0 --continue-schedule
+expect "exits 0" rc_is 0
+expect "says there is nothing to change" says "ok: this node already has this schedule: nothing to change"
+expect "changes nothing" not logged_re '^(install|systemctl)'
+finish
+
+begin step-whole "the old way: the whole schedule on a node whose chain is too short does not start, and the old file goes back"
+sandbox steps-whole
+local_args good
+run step-whole-install "${LOCAL[@]}" "${ANCHORS[@]}"
+expect "a node is set up first" rc_is 0
+cp -- "$ROOT/etc/qsdm-follower/core.toml" "$T/cases/step-whole-before.toml"
+printf '1100\n' >"$T/control/local-tip"
+touch "$T/control/local-down"
+run step-whole "${LOCAL[@]}" --wait-minutes 0 --update-schedule --producer-schedule "$T/fixtures/schedule-two.toml"
+expect "exits 1 (the node does not answer, so it gets the whole schedule)" rc_is 1
+expect "says the node did not start" says "STOP: The node did not start with the new schedule"
+expect "the old core.toml is back" same_file "$ROOT/etc/qsdm-follower/core.toml" "$T/cases/step-whole-before.toml"
+finish
+
+begin step-update "--update-schedule on a node behind the hand-over blocks: no restart, the timer takes over"
+run step-update "${LOCAL[@]}" --wait-minutes 0 --update-schedule --producer-schedule "$T/fixtures/schedule-two.toml"
+expect "exits 0" rc_is 0
+expect "says the node waits" says "the next one takes over after block 1200, which your node does not have yet (it waits there)"
+expect "does not restart the node" restarts_were 0
+expect "keeps the schedule for the timer" same_file "$ROOT/etc/qsdm-follower/producer-schedule.toml" "$T/fixtures/schedule-two.toml"
+expect "starts the timer" timer_on
+expect "says it is done for now" says "Done for now: the node carries the block-maker schedule in $T/fixtures/schedule-two.toml as far as its chain reaches."
+finish
+
+begin step-refused "the node does not start with the next block maker: the old file goes back and the timer stops"
+printf '1200\n' >"$T/control/local-tip"
+cp -- "$ROOT/etc/qsdm-follower/core.toml" "$T/cases/step-refused-before.toml"
+touch "$SHIM_STATE/fail-next-restart"
+run step-refused "${LOCAL[@]}" --wait-minutes 0 --continue-schedule
+expect "exits 1" rc_is 1
+expect "says the node did not start" says "STOP: The node did not start with the new schedule"
+expect "the old core.toml is back" same_file "$ROOT/etc/qsdm-follower/core.toml" "$T/cases/step-refused-before.toml"
+expect "the timer stops (no restart every 10 minutes)" not timer_on
+expect "  and its files go" no_step_files
+finish
+
+begin step-options "--continue-schedule reads only the saved schedule; without one it does nothing"
+run step-options-web "${LOCAL[@]}" --continue-schedule --from-website
+expect "with --from-website: exits 2" rc_is 2
+expect "  and says why" says "--continue-schedule takes the schedule this installer saved in /etc/qsdm-follower/producer-schedule.toml"
+rm -f -- "$ROOT/etc/qsdm-follower/producer-schedule.toml"
+run step-options-none "${LOCAL[@]}" --continue-schedule
+expect "without a saved schedule: exits 0" rc_is 0
+expect "  and says there is nothing to continue" says "There is no saved block-maker schedule (/etc/qsdm-follower/producer-schedule.toml): nothing to continue."
+rm -f -- "$T/control/local-tip"
+finish
+
+begin step-repair "an earlier installer put the whole schedule in and the import refused it: a re-run puts in the snapshot's part"
+sandbox steps-repair
+local_args good
+mkdir -p "$ROOT/etc/qsdm-follower"
+# the release's file with the page's whole schedule, as an installer before this one left it
+cp -- "$T/sb/sched/root/etc/qsdm-follower/core.toml" "$ROOT/etc/qsdm-follower/core.toml"
+printf '1100\n' >"$T/control/local-tip"
+run step-repair "${LOCAL[@]}" --wait-minutes 0 --from-website --website-url "$BASE/site/sched-two.html"
+expect "exits 0" rc_is 0
+expect "says it puts in the snapshot's part" says "had more block makers than the snapshot reaches (an earlier run)"
+expect "core.toml is the release's fullnode-core.toml" same_file "$ROOT/etc/qsdm-follower/core.toml" "$GOOD/fullnode-core.toml"
+expect "imports the snapshot" imports_run 1
+expect "the node starts" not exists "$SHIM_STATE/failed"
+expect "starts the timer for the other two" timer_on
+rm -f -- "$T/control/local-tip"
 finish
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
