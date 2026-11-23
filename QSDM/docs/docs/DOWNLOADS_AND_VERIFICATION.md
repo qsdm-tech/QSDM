@@ -9,15 +9,15 @@ All downloads are linked from **[qsdm.tech/download.html](https://qsdm.tech/down
 
 | Product | Version | Platform | File | Size | SHA-256 |
 |---|---|---|---|---|---|
-| QSDM Hive | 1.4.26 | Windows x64 | `qsdm-hive-1.4.26-win-x64.exe` | 128.9 MB | `a9dc7cd8f6b80015284a3783bb631ee88f59bace7c52541a22cc8906624e0037` |
-| QSDM Hive | 1.4.26 | Linux x86-64 | `qsdm-hive-1.4.26-linux-x86_64.AppImage` | 166.7 MB | `9d8bb8d8f190505a9ba5d81e3f9c428d3b1512f0651b426381295e6428c80a56` |
-| QSDM Hive | 1.4.26 | Linux x86-64 | `qsdm-hive-1.4.26-linux-x64.tar.gz` | 157.7 MB | `e4e507c7e2098bc5c5a381ca15c2a0839fc567d95ce51b12d764e6994cbcef61` |
+| QSDM Hive | 1.4.27 | Windows x64 | `qsdm-hive-1.4.27-win-x64.exe` | 133.7 MB | `99b6d29cb3ea3aa3e2b06a2e6299d1c9ec1866f242d54d8cfc79e60db653b387` |
+| QSDM Hive | 1.4.27 | Linux x86-64 | `qsdm-hive-1.4.27-linux-x86_64.AppImage` | 169.2 MB | `b1cbda7ae585b37598c38944c596f83f2a5d8c570b39c21c63e4e1fb6c838c72` |
+| QSDM Hive | 1.4.27 | Linux x86-64 | `qsdm-hive-1.4.27-linux-x64.tar.gz` | 160.1 MB | `5b8173fb81a888a9d69b45edf1b93b576665475acb1ea9dd1097359462062528` |
 | QSDM Hive | 1.4.26 | macOS 12+ (Apple silicon and Intel) | `qsdm-hive-1.4.26-mac-universal.dmg` | 244.2 MB | `1af056bf109b2977186324924f79de55a5e0b37495fff0b10e36ea91fa410f38` |
 | QSDM Hive | 1.4.26 | macOS 12+ (Apple silicon and Intel) | `qsdm-hive-1.4.26-mac-universal.zip` | 243.6 MB | `c064f9d494982bd55efbb404259d24533c27ab7d6797740968a5d3e2d27d5417` |
 
-Hive 1.4.26 (published 22 November 2026) is served from the release channel
+Hive 1.4.27 (published 23 November 2026) is served from the release channel
 `https://qsdm.tech/downloads/hive-v2/`, together with checksum files
-(`SHA256SUMS-win.txt`, `qsdm-hive-1.4.26-linux-SHA256SUMS.txt`) and the signed
+(`SHA256SUMS-win.txt`, `qsdm-hive-1.4.27-linux-SHA256SUMS.txt`) and the signed
 release manifests (`qsdm-hive-release-windows-v2.json`,
 `qsdm-hive-release-linux-v2.json`).
 
@@ -47,9 +47,9 @@ the producer's exact `qsdm`. The one-command installer,
 needs 6 GB of RAM. See [Run a full node](RUN_A_FULL_NODE.md).
 
 > [!IMPORTANT]
-> **Upgrading from Hive 1.4.20 (Windows) or 1.4.17 (Linux):** install 1.4.26 by
+> **Upgrading from Hive 1.4.20 (Windows) or 1.4.17 (Linux):** install 1.4.27 by
 > hand once. Those versions trust the previous release key, which was rotated, so
-> they cannot verify 1.4.26 on their own. Your wallet and settings are kept.
+> they cannot verify 1.4.27 on their own. Your wallet and settings are kept.
 > Hive 1.4.17 stopped working after 9 November 2026; 1.4.20 stops after
 > 19 December 2026.
 
@@ -61,14 +61,14 @@ not match, delete the file and download it again from qsdm.tech.
 **Windows (PowerShell):**
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\qsdm-hive-1.4.26-win-x64.exe
+Get-FileHash -Algorithm SHA256 .\qsdm-hive-1.4.27-win-x64.exe
 ```
 
 **Linux:**
 
 ```bash
-curl -fsSLO https://qsdm.tech/downloads/hive-v2/qsdm-hive-1.4.26-linux-SHA256SUMS.txt
-sha256sum -c --ignore-missing qsdm-hive-1.4.26-linux-SHA256SUMS.txt
+curl -fsSLO https://qsdm.tech/downloads/hive-v2/qsdm-hive-1.4.27-linux-SHA256SUMS.txt
+sha256sum -c --ignore-missing qsdm-hive-1.4.27-linux-SHA256SUMS.txt
 ```
 
 **macOS (Terminal):**
