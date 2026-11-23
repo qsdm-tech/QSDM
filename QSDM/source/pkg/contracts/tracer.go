@@ -356,17 +356,18 @@ func (ct *CallTracer) GetByCall(contractID, funcName string) []*CallTrace {
 	return out
 }
 
-// Recent returns the last N traces.
+// Recent returns the last N traces, newest first. It never allocates more
+// than the tracer holds, whatever n the caller passes.
 func (ct *CallTracer) Recent(n int) []*CallTrace {
 	ct.mu.RLock()
 	defer ct.mu.RUnlock()
 	if n <= 0 || len(ct.order) == 0 {
 		return nil
 	}
-	start := len(ct.order) - n
-	if start < 0 {
-		start = 0
+	if n > len(ct.order) {
+		n = len(ct.order)
 	}
+	start := len(ct.order) - n
 	out := make([]*CallTrace, 0, n)
 	for i := len(ct.order) - 1; i >= start; i-- {
 		if t, ok := ct.traces[ct.order[i]]; ok {

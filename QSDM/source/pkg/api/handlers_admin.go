@@ -189,6 +189,9 @@ func (a *AdminAPI) handleReceipts(w http.ResponseWriter, r *http.Request) {
 			n = parsed
 		}
 	}
+	if n > RecentListMaxLimit {
+		n = RecentListMaxLimit
+	}
 	a.writeJSON(w, http.StatusOK, a.Receipts.Recent(n))
 }
 
@@ -264,6 +267,9 @@ func (a *AdminAPI) handleTraces(w http.ResponseWriter, r *http.Request) {
 		if parsed, err := strconv.Atoi(nStr); err == nil && parsed > 0 {
 			n = parsed
 		}
+	}
+	if n > RecentListMaxLimit {
+		n = RecentListMaxLimit
 	}
 	a.writeJSON(w, http.StatusOK, a.Tracer.Recent(n))
 }

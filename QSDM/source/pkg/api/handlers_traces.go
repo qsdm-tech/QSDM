@@ -16,6 +16,12 @@ var traceUpgrader = websocket.Upgrader{
 	CheckOrigin:     func(r *http.Request) bool { return true },
 }
 
+// RecentListMaxLimit caps ?n= on the recent-record lists: contract traces
+// (/api/v1/contracts/traces, /api/v1/contracts/traces/ws, /api/admin/traces)
+// and receipts (/api/admin/receipts). Same idea as MiningReceiptsListMaxLimit:
+// a client may ask for any n, one call returns at most this many records.
+const RecentListMaxLimit = 1000
+
 // ListContractTraces returns recent traces or traces filtered by contract+function.
 func (h *Handlers) ListContractTraces(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -41,6 +47,9 @@ func (h *Handlers) ListContractTraces(w http.ResponseWriter, r *http.Request) {
 		if p, err := strconv.Atoi(s); err == nil && p > 0 {
 			n = p
 		}
+	}
+	if n > RecentListMaxLimit {
+		n = RecentListMaxLimit
 	}
 	recent := tr.Recent(n)
 	writeJSONResponse(w, http.StatusOK, map[string]interface{}{"traces": recent, "count": len(recent)})
@@ -99,6 +108,9 @@ func (h *Handlers) StreamContractTracesWS(w http.ResponseWriter, r *http.Request
 		if p, err := strconv.Atoi(s); err == nil && p > 0 {
 			n = p
 		}
+	}
+	if n > RecentListMaxLimit {
+		n = RecentListMaxLimit
 	}
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
