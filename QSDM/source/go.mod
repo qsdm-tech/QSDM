@@ -21,7 +21,7 @@ require (
 require (
 	github.com/cloudflare/circl v1.6.3
 	github.com/google/uuid v1.6.0
-	github.com/gorilla/websocket v1.5.3
+	github.com/gorilla/websocket v1.5.4-0.20240701034025-d67f41855da4
 	github.com/libp2p/go-yamux/v5 v5.1.0
 	github.com/multiformats/go-multiaddr v0.16.1
 	github.com/pbnjay/memory v0.0.0-20210728143218-7b4eea64cf58
