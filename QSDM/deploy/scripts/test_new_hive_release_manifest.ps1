@@ -61,7 +61,9 @@ $r = Build '' ''
 Check ($r.Keys -ceq $baseKeys) "no policy fields: the fields and order of before ($($r.Keys))"
 Check ($r.Json -notmatch 'min_supported_version|rollout_percent') 'no policy fields: neither key is written'
 Check ($r.Parsed.commit -ceq ('0123456789abcdef' * 2 + '01234567') -and $r.Parsed.key_id -ceq ('c' * 64)) 'commit and key_id lowercase'
-Check ($r.Parsed.issued_at -like '2026-11-25T10:00:00*' -and $r.Parsed.expires_at -like '2027-02-23T10:00:00*') 'issued_at and expires_at (90 days)'
+# The dates are checked in the JSON text: pwsh's ConvertFrom-Json turns ISO
+# date strings into DateTime values, whose string form follows the culture.
+Check ($r.Json -match '"issued_at":\s+"2026-11-25T10:00:00\.0000000Z"' -and $r.Json -match '"expires_at":\s+"2027-02-23T10:00:00\.0000000Z"') 'issued_at and expires_at (90 days)'
 Check (@($r.Parsed.artifacts).Count -eq 2) 'artifacts kept'
 
 $r = Build '1.4.27' ''
