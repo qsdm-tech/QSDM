@@ -9,6 +9,7 @@ import path from 'path';
 import { getQsdmCellAccount } from 'main/controllers/qsdm/getQsdmCellAccount';
 import { getAppDataPath } from 'main/node/helpers/getAppDataPath';
 
+import { assertSignMessageOrigin } from './qsdmSignMessageOrigin';
 import { signQsdmMessageWithCli } from './qsdmTaskActions';
 import {
   getQsdmTaskActionSender,
@@ -16,6 +17,7 @@ import {
 } from './qsdmTaskActionSigner';
 import { submitQsdmWalletTransferIntent } from './qsdmWalletTransfer';
 
+import type { SignMessageKind } from './qsdmSignMessageOrigin';
 import type { Event } from 'electron';
 import type {
   QsdmWalletProviderPermission,
@@ -245,6 +247,36 @@ const confirmRequest = async ({
   }
 };
 
+const signApproval = (
+  kind: SignMessageKind,
+  origin: string,
+  address: string,
+  message: string
+) => {
+  if (kind === 'account-sign-in') {
+    return {
+      title: 'Sign in to QSDM Account',
+      message: `${origin} wants to sign you in to QSDM Account.`,
+      detail: `Wallet: ${address}\n\nThis only signs you in. It cannot send CELL.\n\nMessage:\n${message}`,
+      approveLabel: 'Sign in',
+    };
+  }
+  if (kind === 'account-link') {
+    return {
+      title: 'Link wallet to QSDM Account',
+      message: `${origin} wants to link this wallet to your QSDM Account.`,
+      detail: `Wallet: ${address}\n\nThis only links the wallet. It cannot send CELL.\n\nMessage:\n${message}`,
+      approveLabel: 'Link wallet',
+    };
+  }
+  return {
+    title: 'Sign QSDM message',
+    message: `${origin} is requesting a wallet signature.`,
+    detail: `Address: ${address}\n\nMessage:\n${message}`,
+    approveLabel: 'Sign',
+  };
+};
+
 const getStringParam = (params: unknown, key: string, required = true) => {
   const value =
     params && typeof params === 'object'
@@ -405,14 +437,11 @@ export const handleWalletProviderRequest = async (
     if (Buffer.byteLength(message, 'utf-8') > MAX_MESSAGE_BYTES) {
       throw new Error('QSDM messages are limited to 16 KiB');
     }
+    // Refused before any prompt: a message for another website.
+    const kind = assertSignMessageOrigin(message, origin);
     options.showHive();
     await enqueueApproval(() =>
-      confirmRequest({
-        title: 'Sign QSDM message',
-        message: `${origin} is requesting a wallet signature.`,
-        detail: `Address: ${address}\n\nMessage:\n${message}`,
-        approveLabel: 'Sign',
-      })
+      confirmRequest(signApproval(kind, origin, address, message))
     );
     return signQsdmMessageWithCli(message);
   }
