@@ -6,6 +6,7 @@ import path from 'path';
 import axios from 'axios';
 
 import { getAppDataPath } from 'main/node/helpers/getAppDataPath';
+import { isHiveE2ETestRun } from 'main/services/hiveE2E';
 import { QsdmBountyLedgerStatus } from 'models/api/qsdm';
 import {
   parseQsdmBountyLedger,
@@ -14,6 +15,11 @@ import {
 } from 'utils/qsdmBountyLedger';
 
 const FETCH_TIMEOUT_MS = 8000;
+
+// The public ledger; an end-to-end test run may serve its own (hiveE2E.ts).
+export const getQsdmBountyLedgerUrl = (env: NodeJS.ProcessEnv = process.env) =>
+  (isHiveE2ETestRun(env) && env.QSDM_HIVE_E2E_BOUNTY_LEDGER_URL?.trim()) ||
+  QSDM_BOUNTY_LEDGER_URL;
 const MAX_LEDGER_BYTES = 2 * 1024 * 1024;
 
 export const getQsdmBountyLedgerCachePath = () =>
@@ -44,7 +50,7 @@ export const getQsdmBountyLedgerStatus =
   async (): Promise<QsdmBountyLedgerStatus> => {
     const checkedAt = new Date().toISOString();
     try {
-      const { data } = await axios.get<unknown>(QSDM_BOUNTY_LEDGER_URL, {
+      const { data } = await axios.get<unknown>(getQsdmBountyLedgerUrl(), {
         timeout: FETCH_TIMEOUT_MS,
         maxContentLength: MAX_LEDGER_BYTES,
         responseType: 'json',

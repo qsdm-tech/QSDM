@@ -72,6 +72,10 @@ export type QsdmHiveReleaseManifest = {
   // ML-DSA-87 signature covers the exact manifest bytes, so this field is
   // signed like every other. Hive before 1.4.26 ignores it.
   min_supported_version?: string;
+  // Optional: the share of Hives (0-100) that update on their own now; see
+  // hiveRollout.ts. Signed like every other field. Hive before 1.4.28
+  // ignores it.
+  rollout_percent?: number;
 };
 
 // The signed manifest's min_supported_version when it is a MAJOR.MINOR.PATCH

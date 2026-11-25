@@ -178,6 +178,46 @@ const shownParams = (method, params) => {
   return {};
 };
 
+// A message that names a website ("Origin: https://qsdm.tech", as in the QSDM
+// Account sign-in) is only for that website: another site asking for it is
+// refused before any window, as Hive does. A QSDM Account message must name
+// its website. Returns an error text, or "" when the message may be shown.
+const ORIGIN_LINE = /^[ \t]*origin[ \t]*:[ \t]*(.*?)[ \t]*$/i;
+const signMessageOriginProblem = (message, origin) => {
+  const text = String(message ?? "");
+  const lines = text.split(/\r\n|\n|\r/);
+  const accountMessage = /^qsdm account\b/i.test((lines[0] || "").trim());
+  const stated = lines
+    .map((line) => ORIGIN_LINE.exec(line))
+    .filter(Boolean)
+    .map((match) => match[1]);
+  if (stated.length === 0) {
+    return accountMessage
+      ? "This QSDM Account message does not name its website. It was not signed."
+      : "";
+  }
+  const origins = new Set(
+    stated.map((value) => {
+      try {
+        const parsed = new URL(value);
+        return parsed.origin !== "null" &&
+          parsed.origin === value.replace(/\/$/, "")
+          ? parsed.origin
+          : "";
+      } catch {
+        return "";
+      }
+    })
+  );
+  if (origins.size !== 1 || origins.has("")) {
+    return "This message names an unclear website. It was not signed.";
+  }
+  const [named] = [...origins];
+  return named === origin
+    ? ""
+    : `This message is for ${named}, but ${origin} asked to sign it. It was not signed.`;
+};
+
 const settleApproval = (approval, response) => {
   if (approval.settled) return;
   approval.settled = true;
@@ -186,6 +226,10 @@ const settleApproval = (approval, response) => {
 };
 
 const approveThenSend = async (origin, method, params) => {
+  if (method === "qsdm_signMessage") {
+    const problem = signMessageOriginProblem(params?.message, origin);
+    if (problem) return { ok: false, code: 4100, error: problem };
+  }
   // Hive closed or locked, or a site that is not connected yet asking to sign
   // or send: Hive answers these itself, as before, without a window.
   const ping = await sendNative(INTERNAL_ORIGIN, "qsdm_ping", undefined, 5000);

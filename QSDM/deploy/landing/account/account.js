@@ -798,6 +798,14 @@
         location.assign(API + "/telegram/start");
       } else if (requested === "email" && config.login.email && !account) {
         elements.email.focus();
+      } else if (requested === "wallet" && config.login.wallet && !account) {
+        // From the wallet extension. Signing still waits for the click and
+        // for the approval in Hive.
+        elements.walletSignIn.focus();
+        bootNotice = bootNotice || {
+          message: "Select Continue with QSDM wallet, then approve in Hive.",
+          state: "info",
+        };
       }
     }
     const errorCode = search.get("error");

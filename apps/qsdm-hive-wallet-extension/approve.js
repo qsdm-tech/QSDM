@@ -117,9 +117,21 @@
         return;
       }
     } else if (r.method === "qsdm_signMessage") {
+      // background.js has already refused a QSDM Account message for another website.
+      const head = String(r.params.message || "").split(/\r\n|\n|\r/, 1)[0].trim();
+      const signIn = head === "QSDM Account wallet sign-in";
+      const link = head === "QSDM Account wallet link";
       document.title = `Sign for ${host} - QSDM Wallet`;
-      $("approve-title").textContent = "Sign a message";
-      $("approve-sub").textContent = `${host} asks your wallet to sign this message.`;
+      $("approve-title").textContent = signIn
+        ? "Sign in to QSDM Account"
+        : link
+          ? "Link wallet to QSDM Account"
+          : "Sign a message";
+      $("approve-sub").textContent = signIn
+        ? `${host} asks to sign you in. This cannot send CELL.`
+        : link
+          ? `${host} asks to link this wallet. This cannot send CELL.`
+          : `${host} asks your wallet to sign this message.`;
       $("approve-trust").hidden = true;
       facts.append(fact("Origin", r.origin), fact("Account", groupedAddress(r.address), { block: true }));
       $("message-box").hidden = false;

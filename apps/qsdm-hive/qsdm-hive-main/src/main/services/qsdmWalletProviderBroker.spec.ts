@@ -172,6 +172,56 @@ describe('qsdmWalletProviderBroker', () => {
     expect(dialog.showMessageBox).toHaveBeenCalledTimes(2);
   });
 
+  it('never shows or signs a QSDM Account message for another website', async () => {
+    await handleWalletProviderRequest(request('qsdm_requestAccounts'), options);
+    (dialog.showMessageBox as jest.Mock).mockClear();
+    options.showHive.mockClear();
+    const signIn = `QSDM Account wallet sign-in\nVersion: 1\nOrigin: https://qsdm.tech\nAddress: ${sender}\nChallenge: c1`;
+
+    await expect(
+      handleWalletProviderRequest(
+        request('qsdm_signMessage', { message: signIn }),
+        options
+      )
+    ).rejects.toThrow(
+      'This message is for https://qsdm.tech, but https://example.com asked to sign it.'
+    );
+    expect(dialog.showMessageBox).not.toHaveBeenCalled();
+    expect(options.showHive).not.toHaveBeenCalled();
+    expect(mockSignQsdmMessageWithCli).not.toHaveBeenCalled();
+  });
+
+  it('shows a QSDM Account sign-in from its own website as a sign-in', async () => {
+    const accountRequest = (method: string, params?: unknown) => ({
+      ...request(method, params),
+      origin: 'https://qsdm.tech',
+    });
+    await handleWalletProviderRequest(
+      accountRequest('qsdm_requestAccounts'),
+      options
+    );
+    (dialog.showMessageBox as jest.Mock).mockClear();
+    const signIn = `QSDM Account wallet sign-in\nVersion: 1\nOrigin: https://qsdm.tech\nAddress: ${sender}\nChallenge: c1`;
+
+    await expect(
+      handleWalletProviderRequest(
+        accountRequest('qsdm_signMessage', { message: signIn }),
+        options
+      )
+    ).resolves.toEqual(expect.objectContaining({ signature: 'signature' }));
+    expect(dialog.showMessageBox).toHaveBeenCalledTimes(1);
+    const shown = (dialog.showMessageBox as jest.Mock).mock.calls[0].at(-1);
+    expect(shown).toEqual(
+      expect.objectContaining({
+        title: 'Sign in to QSDM Account',
+        buttons: ['Sign in', 'Reject'],
+      })
+    );
+    expect(shown.detail).toContain('It cannot send CELL.');
+    expect(shown.detail).toContain(signIn);
+    expect(mockSignQsdmMessageWithCli).toHaveBeenCalledWith(signIn);
+  });
+
   it('revokes a site grant immediately', async () => {
     await handleWalletProviderRequest(request('qsdm_requestAccounts'), options);
 

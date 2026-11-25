@@ -1,3 +1,11 @@
+## [1.4.28]
+
+- Signing: when a message names its website on an `Origin:` line, as the QSDM Account sign-in and wallet-link messages do, Hive signs it only when that website asks. A QSDM Account message must name exactly one website. Other messages are signed as before.
+- QSDM Account sign-in and wallet-link requests show a plain "Sign in to QSDM Account" / "Link wallet to QSDM Account" approval that says it cannot send CELL.
+- Browser wallet extension 0.6.1: "Sign in to QSDM Account" on the welcome page replaces "Continue with Telegram", which led to a sign-in that is turned off. The extension makes the same website check before it opens an approval window.
+- Updates: the signed release feed can carry `min_supported_version` and `rollout_percent`. A normal release keeps older Hives mining; only a security release blocks them. With a rollout below 100%, automatic update checks offer the new version to that share of installs, chosen by a random install ID that stays on the computer and is never sent. A check the user asks for, a security release and a Hive below the minimum are never held back.
+- Tests: end-to-end tests drive the real app (launch, create wallet, wallet switch, Recent transactions, Bug Bounty row). The test mode is ignored by packaged builds.
+
 ## [1.4.27]
 
 - Tasks: Hive starts a task only when the QSDM task catalog lists it, and then builds the task's runner itself. It never downloads task code: there is no fallback to a `main.js` from IPFS or Arweave. The runner is built again on every start, so an old file in `executables/` never runs. When the catalog cannot be read, the start stops with "The QSDM task catalog is unavailable; try again."; a task the catalog does not list stops with "This task is not in the QSDM catalog." (#263).

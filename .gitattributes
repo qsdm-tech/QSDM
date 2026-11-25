@@ -23,6 +23,11 @@
 *.yaml    text eol=lf
 Dockerfile text eol=lf
 
+# The Hive release signer and its test stay LF in every checkout, also on a
+# Windows checkout with core.autocrlf=true (the test checks the signer's bytes).
+QSDM/deploy/scripts/new_hive_release_manifest.ps1      text eol=lf
+QSDM/deploy/scripts/test_new_hive_release_manifest.ps1 text eol=lf
+
 # Landing-site assets are LF on the wire — they are deployed to the
 # Caddy host at /var/www/qsdm via `cat > <remote>` (see
 # cmd/qsdm-deploy-landing) and the SRI hashes in wallet.html are

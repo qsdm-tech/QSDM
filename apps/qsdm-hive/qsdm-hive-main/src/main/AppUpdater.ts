@@ -9,6 +9,11 @@ import { RendererEndpoints } from 'config/endpoints';
 
 import { app } from './app';
 import { getAppDataPath } from './node/helpers/getAppDataPath';
+import { isHiveE2ETestRun } from './services/hiveE2E';
+import {
+  decideHiveUpdateOffer,
+  getHiveInstallId,
+} from './services/hiveRollout';
 import {
   getDownloadedHiveUpdate,
   setDownloadedHiveUpdate,
@@ -73,6 +78,11 @@ export function shouldEnableAutoUpdates(
   // Windows or Linux update there. The version policy still checks the version
   // (against the signed Linux release) and links to the download page.
   if (!hasOwnSignedReleaseChannel(platform)) {
+    return false;
+  }
+
+  // An end-to-end test run of a build that is not packaged (see hiveE2E.ts).
+  if (isHiveE2ETestRun(env)) {
     return false;
   }
 
@@ -329,7 +339,8 @@ function createCheckForTheUpdatesInterval() {
 }
 
 async function runUpdateCheck(
-  reason: string
+  reason: string,
+  { stagedRollout = false }: { stagedRollout?: boolean } = {}
 ): Promise<UpdateCheckResult | null> {
   // Every check, scheduled or asked for by the update screen, goes through
   // here: on macOS the updater is never configured, fetched or run, so no
@@ -344,7 +355,24 @@ async function runUpdateCheck(
   updateCheckPromise = (async () => {
     log.info(`QSDM Hive ${reason} update check`);
     await ensureAppUpdaterConfigured();
-    await ensureTrustedReleaseForUpdate(true);
+    const release = await ensureTrustedReleaseForUpdate(true);
+    // Automatic checks respect the signed staged rollout (rollout_percent).
+    // A Hive the release no longer supports updates anyway, and a check the
+    // user asks for is never held back. See services/hiveRollout.ts.
+    if (stagedRollout) {
+      const offer = decideHiveUpdateOffer({
+        currentVersion: getCurrentHiveVersion(),
+        manifest: release.manifest,
+        installId: getHiveInstallId,
+      });
+      if (offer.reason === 'outside-rollout') {
+        log.info(
+          `QSDM Hive ${release.manifest.version} is rolling out to ${offer.rolloutPercent}% of Hives; this Hive is not in it yet.`
+        );
+        clearRetryTimeout();
+        return null;
+      }
+    }
     const result = await autoUpdater.checkForUpdates();
     clearRetryTimeout();
     return result;
@@ -362,7 +390,7 @@ async function runUpdateCheck(
 
 async function runScheduledUpdateCheck(reason: string) {
   try {
-    await runUpdateCheck(reason);
+    await runUpdateCheck(reason, { stagedRollout: true });
   } catch (error) {
     log.error('QSDM Hive update check failed', error);
   }
