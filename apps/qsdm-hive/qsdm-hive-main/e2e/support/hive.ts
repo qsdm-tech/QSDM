@@ -23,6 +23,36 @@ export type Hive = {
   close: () => Promise<void>;
 };
 
+// Since Electron 27, an evaluate in the main process can fail now and then
+// with "Promise was collected" (Playwright: "Resulting promise was garbage
+// collected") or a destroyed context, even for a synchronous function. Such a
+// call is simply made again; any other error is thrown at once.
+const RETRYABLE_MAIN_ERRORS =
+  /garbage collected|Promise was collected|Execution context was destroyed/;
+
+export const evaluateMain = async <R>(
+  app: ElectronApplication,
+  fn: Parameters<ElectronApplication['evaluate']>[0],
+  timeoutMs = 15_000
+): Promise<R> => {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      return (await app.evaluate(fn as never)) as R;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!RETRYABLE_MAIN_ERRORS.test(message) || Date.now() > deadline) {
+        throw error;
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((resolve) => {
+        setTimeout(resolve, 200);
+      });
+    }
+  }
+};
+
 /**
  * Starts the real Hive build (release/app/dist) with a fresh profile in a
  * temp folder and every QSDM URL pointed at the local mock API. Hive runs in
@@ -69,9 +99,9 @@ export const launchHive = async (api: MockApi): Promise<Hive> => {
     page,
     profileDir,
     close: async () => {
-      await app.evaluate(({ app: electronApp }) => {
+      await evaluateMain(app, ({ app: electronApp }) => {
         (electronApp as unknown as { isQuitting: boolean }).isQuitting = true;
-      });
+      }).catch(() => undefined);
       await app.close().catch(() => undefined);
       fs.rmSync(profileDir, { recursive: true, force: true });
     },

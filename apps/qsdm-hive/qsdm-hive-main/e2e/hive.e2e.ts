@@ -1,6 +1,13 @@
 import { expect, test } from '@playwright/test';
 
-import { goTo, Hive, launchHive, setUpProfile, unlock } from './support/hive';
+import {
+  evaluateMain,
+  goTo,
+  Hive,
+  launchHive,
+  setUpProfile,
+  unlock,
+} from './support/hive';
 import { E2E_HUNTER, MockApi, startMockApi } from './support/mockApi';
 
 import type { Locator, Page } from '@playwright/test';
@@ -85,7 +92,9 @@ test.afterEach(async ({}, testInfo) => {
 });
 
 test('launch: the window opens on the first-run screens', async () => {
-  expect(await hive.app.evaluate(({ app }) => app.isPackaged)).toBe(false);
+  expect(
+    await evaluateMain<boolean>(hive.app, ({ app }) => app.isPackaged)
+  ).toBe(false);
   await expect(page.getByText('three simple steps.')).toBeVisible();
   await page.getByRole('button', { name: 'Start now!', exact: true }).click();
   await expect(page.getByText('Confirm your Access PIN.')).toBeVisible();
