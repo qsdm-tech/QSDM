@@ -1,0 +1,339 @@
+openapi: 3.0.3
+info:
+  title: QSDM wallet history API
+  description: |
+    Per-address transaction history of the QSDM pilot network (coin CELL),
+    served on `https://api.qsdm.tech` and `https://qsdm.tech` by a read-only
+    history index that runs beside the chain on the producer host. The index
+    reads the node's receipts and keeps one row per applied transaction log
+    that names a sender or a recipient; it never writes to the chain.
+
+    These routes are not served by the QSDM node in this repository, so they
+    are described here and not in `openapi.yaml`: that file describes exactly
+    the routes the node registers, and `TestOpenAPIMatchesRegisteredRoutes`
+    (`QSDM/source/pkg/api/openapi_drift_test.go`) fails on a path the node does
+    not serve. A full node's own API does not have these routes.
+
+    ## Common behaviour
+
+    - Public: no login and no API key (`x-qsdm-access: public`).
+    - Every response carries `Cache-Control: no-store`.
+    - No CORS headers: a browser page on another origin cannot read the
+      answers. Call the API from a server, or from a page on qsdm.tech
+      (same origin).
+    - Only GET and HEAD; other methods get 405.
+    - Limited per client IP at the edge; a limited request gets 429, which
+      may come from the edge without a JSON body. Wait and retry with backoff.
+    - Errors from the service are JSON (`HistoryError`).
+
+    For the guide, with examples, see `API_REFERENCE.md` ("Wallet history").
+  version: 1.0.0
+  contact:
+    name: QSDM Development Team
+    url: https://github.com/qsdm-tech/QSDM
+
+servers:
+  - url: https://api.qsdm.tech/api/v1
+    description: Public API host of the pilot network
+  - url: https://qsdm.tech/api/v1
+    description: The same routes for pages on qsdm.tech
+
+tags:
+  - name: Wallet history
+    description: Per-address transaction history from the history index
+
+paths:
+  /wallet/history:
+    get:
+      tags:
+        - Wallet history
+      summary: Transaction history of an address
+      description: |
+        The transaction logs that name `address` as sender or recipient,
+        newest first: by block height, then by the transaction's place in its
+        block, then by log index. History reaches from block 0 to
+        `indexed_tip`; check `indexed_tip` against `chain_tip` (or call
+        `/wallet/history/status`) to see whether the newest blocks are in yet.
+
+        Paging: pass the `next_before` of one page as `before` to get the next
+        older page. The cursor names the last item's place in that order, so a
+        page never shifts when new blocks arrive. `next_before` is `null` on
+        the last page.
+
+        Failed transactions (no applied log) and heartbeats are not listed.
+      operationId: getWalletHistory
+      x-qsdm-access: public
+      parameters:
+        - name: address
+          in: query
+          required: true
+          description: The address, 64 lowercase hex characters.
+          schema:
+            type: string
+            pattern: '^[0-9a-f]{64}$'
+          example: 5d28b82565421e3666ef7a493e0d39fc89d3450009a32cbda72aa89c7cb820e7
+        - name: limit
+          in: query
+          required: false
+          description: Items per page.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: before
+          in: query
+          required: false
+          description: The `next_before` value of the previous page. Opaque; any other value gets 400.
+          schema:
+            type: string
+            pattern: '^[A-Za-z0-9_-]{8,96}$'
+        - name: kind
+          in: query
+          required: false
+          description: |
+            Which items: `all`; `transfers` (every item the address sent, and
+            the wallet transfers, `qsdm/wallet-transfer/v1`, it received); or
+            `rewards` (the mining rewards, `qsdm/mining-reward/v1`, it
+            received).
+          schema:
+            type: string
+            enum:
+              - all
+              - transfers
+              - rewards
+            default: all
+      responses:
+        '200':
+          description: One page of history.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                example: no-store
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WalletHistoryResponse'
+              example:
+                address: 5d28b82565421e3666ef7a493e0d39fc89d3450009a32cbda72aa89c7cb820e7
+                indexed_tip: 1196849
+                chain_tip: 1196849
+                items:
+                  - tx_id: solo-reward-560022-5d28b82565421e3666ef7a493e0d39fc89d3450009a32cbda72aa89c7cb820e7
+                    height: 327003
+                    time: '2026-07-22T01:42:10.164648234Z'
+                    kind: reward
+                    contract: qsdm/mining-reward/v1
+                    from: qsdm-system-funder
+                    to: 5d28b82565421e3666ef7a493e0d39fc89d3450009a32cbda72aa89c7cb820e7
+                    amount: 0.021870612699386505
+                    fee: 0
+                    status: 1
+                    index: 0
+                next_before: MzI3MDAzLjMuMC40MzYzNjg
+        '400':
+          description: |
+            Bad input: `address` missing or not 64 lowercase hex characters,
+            `limit` outside 1 to 200, an unknown `kind`, a `before` that is not
+            a `next_before` value, an unknown or repeated parameter.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HistoryError'
+              example:
+                error: bad_request
+                message: address must be 64 lowercase hex characters
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/Busy'
+
+  /wallet/history/status:
+    get:
+      tags:
+        - Wallet history
+      summary: How far the history index has read
+      operationId: getWalletHistoryStatus
+      x-qsdm-access: public
+      responses:
+        '200':
+          description: The index's progress.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                example: no-store
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WalletHistoryStatus'
+              example:
+                indexed_tip: 1196849
+                chain_tip: 1196849
+                rows: 2008289
+                behind: 0
+        '400':
+          description: A query parameter was given; this route takes none.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HistoryError'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/Busy'
+
+components:
+  responses:
+    MethodNotAllowed:
+      description: Only GET and HEAD are served.
+    RateLimited:
+      description: Too many requests from this IP address. May come from the edge without a JSON body; retry with backoff.
+    Busy:
+      description: The service is busy; retry after the `Retry-After` seconds.
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/HistoryError'
+          example:
+            error: busy
+            message: too many requests at once
+
+  schemas:
+    HistoryError:
+      type: object
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+          description: A short code, for example `bad_request`, `not_found`, `method_not_allowed` or `busy`.
+        message:
+          type: string
+          description: What was wrong, in words.
+
+    WalletHistoryResponse:
+      type: object
+      required:
+        - address
+        - indexed_tip
+        - chain_tip
+        - items
+        - next_before
+      properties:
+        address:
+          type: string
+          description: The queried address.
+        indexed_tip:
+          type: integer
+          nullable: true
+          description: The last block the index has read completely; `null` before it has read any.
+        chain_tip:
+          type: integer
+          nullable: true
+          description: The chain tip the index last saw.
+        items:
+          type: array
+          maxItems: 200
+          items:
+            $ref: '#/components/schemas/WalletHistoryItem'
+        next_before:
+          type: string
+          nullable: true
+          description: Pass as `before` for the next older page; `null` on the last page.
+
+    WalletHistoryItem:
+      type: object
+      description: One applied transaction log. `(tx_id, index)` names it.
+      required:
+        - tx_id
+        - height
+        - time
+        - kind
+        - contract
+        - from
+        - to
+        - amount
+        - fee
+        - status
+        - index
+      properties:
+        tx_id:
+          type: string
+        height:
+          type: integer
+          description: The block that carries the transaction.
+        time:
+          type: string
+          format: date-time
+          nullable: true
+          description: The receipt's timestamp, RFC 3339 in UTC.
+        kind:
+          type: string
+          enum:
+            - send
+            - receive
+            - reward
+            - other
+          description: |
+            Seen from the queried address: `send` when it is the sender (any
+            contract); `receive` for a wallet transfer to it; `reward` for a
+            mining reward to it; `other` for anything else sent to it.
+        contract:
+          type: string
+          nullable: true
+          description: The contract, for example `qsdm/wallet-transfer/v1`, `qsdm/mining-reward/v1` or `qsdm/enroll/v2`.
+        from:
+          type: string
+          nullable: true
+          description: The sender. Usually an address; system payments name a system account such as `qsdm-system-funder`.
+        to:
+          type: string
+          nullable: true
+          description: The recipient, or `null` when the transaction has none (for example an enrollment).
+        amount:
+          type: number
+          description: CELL, as the receipt carries it.
+        fee:
+          type: number
+          description: CELL, as the receipt carries it.
+        status:
+          type: integer
+          description: The receipt status; 1 when the transaction applied.
+        index:
+          type: integer
+          description: The log's index inside its receipt.
+
+    WalletHistoryStatus:
+      type: object
+      required:
+        - indexed_tip
+        - chain_tip
+        - rows
+        - behind
+      properties:
+        indexed_tip:
+          type: integer
+          nullable: true
+          description: The last block the index has read completely.
+        chain_tip:
+          type: integer
+          nullable: true
+          description: The chain tip the index last saw.
+        rows:
+          type: integer
+          description: Transaction logs in the index.
+        behind:
+          type: integer
+          nullable: true
+          description: Blocks the index has not read yet; while above 0, the newest blocks are not in `/wallet/history` yet.
