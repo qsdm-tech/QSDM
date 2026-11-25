@@ -9,6 +9,7 @@ import { RendererEndpoints } from 'config/endpoints';
 
 import { app } from './app';
 import { getAppDataPath } from './node/helpers/getAppDataPath';
+import { isHiveE2ETestRun } from './services/hiveE2E';
 import {
   decideHiveUpdateOffer,
   getHiveInstallId,
@@ -77,6 +78,11 @@ export function shouldEnableAutoUpdates(
   // Windows or Linux update there. The version policy still checks the version
   // (against the signed Linux release) and links to the download page.
   if (!hasOwnSignedReleaseChannel(platform)) {
+    return false;
+  }
+
+  // An end-to-end test run of a build that is not packaged (see hiveE2E.ts).
+  if (isHiveE2ETestRun(env)) {
     return false;
   }
 

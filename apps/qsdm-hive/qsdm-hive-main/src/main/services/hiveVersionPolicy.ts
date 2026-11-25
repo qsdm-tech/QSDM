@@ -6,6 +6,7 @@ import { sendEventAllWindows } from 'utils/sendEventAllWindows';
 
 import { app } from '../app';
 
+import { isHiveE2ETestRun } from './hiveE2E';
 import { getDownloadedHiveUpdate } from './hiveUpdateState';
 import {
   getQsdmHiveReleaseWithEnvelopeCache,
@@ -456,6 +457,10 @@ function getHiveReleaseBaseUrl() {
 }
 
 function isVersionPolicyDisabledForThisProcess() {
+  // Never in a packaged Hive (see hiveE2E.ts).
+  if (isHiveE2ETestRun()) {
+    return true;
+  }
   if (
     canUseLocalHiveVersionPolicyOverrides() &&
     process.env.QSDM_HIVE_DISABLE_VERSION_POLICY === '1'

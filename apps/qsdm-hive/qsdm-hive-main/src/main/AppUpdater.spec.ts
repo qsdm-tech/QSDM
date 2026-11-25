@@ -114,6 +114,17 @@ describe('AppUpdater release channels', () => {
     }
   });
 
+  it('runs no updater in an e2e run of a build that is not packaged, but always in a packaged one', () => {
+    const env = { NODE_ENV: 'production', QSDM_HIVE_E2E: '1' };
+    expect(shouldEnableAutoUpdates(env, '1.4.28', 'linux')).toBe(false);
+    const packaged = jest.replaceProperty(app, 'isPackaged', true);
+    try {
+      expect(shouldEnableAutoUpdates(env, '1.4.28', 'linux')).toBe(true);
+    } finally {
+      packaged.restore();
+    }
+  });
+
   it('never installs signed Windows or Linux updates on macOS', () => {
     expect(
       shouldEnableAutoUpdates(

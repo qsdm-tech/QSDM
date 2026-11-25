@@ -42,6 +42,7 @@ import { setUpPowerStateManagement } from './powerMonitor';
 import { configureMainWindowSecurity } from './security/externalNavigation';
 import { trackEvent } from './services/analytics';
 import ExecutableMonitor from './services/ExecutableMonitorService';
+import { isHiveE2ETestRun } from './services/hiveE2E';
 import qsdmHiveTasks from './services/qsdmHiveTasks';
 import { installQsdmRateLimitRetry } from './services/qsdmHttpRetry';
 import {
@@ -608,7 +609,8 @@ const main = async (): Promise<void> => {
   installQsdmRateLimitRetry();
   initHandlers();
 
-  if (isProductionRuntime && !isSmokeTest) {
+  // An end-to-end test run changes nothing outside Hive's data folder.
+  if (isProductionRuntime && !isSmokeTest && !isHiveE2ETestRun()) {
     try {
       const registration = registerQsdmWalletProviderNativeHost();
       console.log('QSDM browser wallet bridge registered', registration);
@@ -799,7 +801,9 @@ const createWindow = async () => {
   // A slow service bootstrap must never delay a required Hive update.
   await initializeAppUpdater(mainWindow, appCleanup);
 
-  await setLaunchOnRestartOnByDefault(userConfig);
+  if (!isHiveE2ETestRun()) {
+    await setLaunchOnRestartOnByDefault(userConfig);
+  }
 
   await main().catch((err): void => {
     writeStartupLog('main bootstrap failed', {
@@ -885,6 +889,9 @@ const createWindow = async () => {
   });
 
   try {
+    if (isHiveE2ETestRun()) {
+      throw new Error('not in an end-to-end test run');
+    }
     const protocolRegistered = process.defaultApp
       ? process.argv.length >= 2 &&
         app.setAsDefaultProtocolClient('qsdm-hive', process.execPath, [
