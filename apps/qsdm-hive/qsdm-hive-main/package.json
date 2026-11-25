@@ -40,7 +40,8 @@
     "start:main": "cross-env NODE_ENV=development node ./.erb/scripts/start-main.cjs",
     "start:preload": "cross-env NODE_ENV=development TS_NODE_TRANSPILE_ONLY=true webpack --config ./.erb/configs/webpack.config.preload.dev.ts",
     "start:renderer": "cross-env NODE_ENV=development TS_NODE_TRANSPILE_ONLY=true webpack serve --config .erb/configs/webpack.config.renderer.dev.ts",
-    "test": "jest"
+    "test": "jest",
+    "test:e2e": "playwright test -c e2e/playwright.config.ts"
   },
   "lint-staged": {
     "*.{js,jsx,ts,tsx}": [
@@ -198,6 +199,7 @@
     "@cspell/eslint-plugin": "^6.31.1",
     "@electron/notarize": "^2.3.2",
     "@electron/rebuild": "4.0.4",
+    "@playwright/test": "1.65.0",
     "@pmmmwh/react-refresh-webpack-plugin": "^0.5.10",
     "@svgr/webpack": "^6.5.1",
     "@teamsupercell/typings-for-css-modules-loader": "^2.5.2",
