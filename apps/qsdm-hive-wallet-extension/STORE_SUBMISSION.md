@@ -26,9 +26,9 @@ submitted independently to Microsoft.
 
 ## Required listing links
 
-- Privacy policy: `https://github.com/blackbeardONE/QSDM/blob/main/PRIVACY.md`
+- Privacy policy: `https://github.com/qsdm-tech/QSDM/blob/main/PRIVACY.md`
 - Support and documentation: `https://qsdm.tech/docs/#/qsdm-hive`
-- Security reporting: `https://github.com/blackbeardONE/QSDM/security/policy`
+- Security reporting: `https://github.com/qsdm-tech/QSDM/security/policy`
 - Product download page: `https://qsdm.tech/download.html#browser-extension`
 
 Explain that the extension does not store a keystore, passphrase, private key,

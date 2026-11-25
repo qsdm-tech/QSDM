@@ -1072,20 +1072,21 @@ const runOnboardingChecks = async (browser, testUrl, extensionId) => {
   assert.equal((await onboarding.$$("#apple-login")).length, 0);
   assert.equal((await onboarding.$$("#email-login")).length, 0);
 
-  const telegramTargetPromise = browser.waitForTarget(
+  assert.equal((await onboarding.$$("#telegram-login")).length, 0);
+  const accountTargetPromise = browser.waitForTarget(
     (target) =>
       target.url() ===
-      "https://qsdm.tech/account/?login=telegram&source=extension",
+      "https://qsdm.tech/account/?login=wallet&source=extension",
     { timeout: 15000 }
   );
-  await onboarding.click("#telegram-login");
-  const telegramTarget = await telegramTargetPromise;
+  await onboarding.click("#account-login");
+  const accountTarget = await accountTargetPromise;
   assert.equal(
     await onboarding.$eval("#notice", (element) => element.textContent),
-    "Opening secure Telegram login..."
+    "Opening QSDM Account..."
   );
-  const telegramPage = await telegramTarget.page();
-  await telegramPage?.close();
+  const accountTargetPage = await accountTarget.page();
+  await accountTargetPage?.close();
 
   if (screenshotDirectory) {
     fs.mkdirSync(screenshotDirectory, { recursive: true });

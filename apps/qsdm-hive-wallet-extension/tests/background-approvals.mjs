@@ -243,6 +243,47 @@ const hiveWith = (connected = new Set()) => (m) => {
     assert.equal(h.log.fetches.length, 2, "only the two allowed reads were fetched");
     console.log("api relay: ok");
   }
+  // 10. A message that names another website is refused before any window or
+  // Hive request; one that names the asking site opens the window as usual.
+  {
+    const ACCOUNT = "https://qsdm.tech";
+    const signIn = (origin) =>
+      `QSDM Account wallet sign-in\nVersion: 1\nOrigin: ${origin}\nAddress: ${ME}\nChallenge: c1`;
+    const h = load(hiveWith(new Set([SITE, ACCOUNT])));
+    const phish = h.fromSite(SITE, "qsdm_signMessage", { message: signIn(ACCOUNT) });
+    await tick(10);
+    assert.equal(h.log.windows.length, 0, "no window for another site's message");
+    assert.equal(h.log.native.length, 0, "Hive never asked");
+    assert.equal(h.response(phish).ok, false);
+    assert.equal(h.response(phish).code, 4100);
+    assert.match(h.response(phish).error, /is for https:\/\/qsdm\.tech, but https:\/\/blackbeard\.finance asked/);
+    const crlf = h.fromSite(SITE, "qsdm_signMessage", { message: signIn(ACCOUNT).replace(/\n/g, "\r\n") });
+    const noOrigin = h.fromSite(ACCOUNT, "qsdm_signMessage", { message: "QSDM Account wallet link\nAddress: x" });
+    const two = h.fromSite(SITE, "qsdm_signMessage", { message: `${signIn(SITE)}\nOrigin: ${ACCOUNT}` });
+    const pagePath = h.fromSite(ACCOUNT, "qsdm_signMessage", { message: "Hi\nOrigin: https://qsdm.tech/account/" });
+    await tick(10);
+    assert.equal(h.response(crlf).code, 4100);
+    assert.match(h.response(noOrigin).error, /does not name its website/);
+    assert.match(h.response(two).error, /unclear website/);
+    assert.match(h.response(pagePath).error, /unclear website/);
+    assert.equal(h.log.native.length, 0, "Hive never asked");
+    const own = h.fromSite(ACCOUNT, "qsdm_signMessage", { message: signIn(ACCOUNT) });
+    await tick(30);
+    assert.equal(h.log.windows.length, 1, "the account site's own message opens the window");
+    const p = h.openPort(h.log.windows[0]);
+    assert.equal(p.posted[0].params.message, signIn(ACCOUNT));
+    p.send({ type: "approve" });
+    await tick(20);
+    assert.equal(h.log.native.at(-1), `qsdm_signMessage@${ACCOUNT}`);
+    assert.deepEqual(h.response(own), { ok: true, result: { signature: "sig" } });
+    const plainMessage = h.fromSite(SITE, "qsdm_signMessage", { message: "ownership challenge" });
+    await tick(30);
+    assert.equal(h.log.windows.length, 2, "a message without a website opens the window");
+    h.openPort(h.log.windows[1]).send({ type: "approve" });
+    await tick(20);
+    assert.equal(h.response(plainMessage).ok, true);
+    console.log("message for another website refused, own website and plain messages pass: ok");
+  }
   console.log("background approvals: all passed");
 })().catch((e) => {
   console.error(e);
