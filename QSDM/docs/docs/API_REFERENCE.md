@@ -39,6 +39,7 @@ sometimes with a `Retry-After` header; wait and retry with backoff.
 | Most other read endpoints | 30 requests per minute (the node's limit for callers without a login; the 100-per-minute default applies too) |
 | `POST /wallet/submit-signed` | 10 requests per minute |
 | Mining endpoints on `api.qsdm.tech` | Limited per IP at the edge (bursts allowed); `POST /mining/submit` about 60 per minute |
+| `/wallet/history`, `/wallet/history/status` | Limited per IP at the edge (bursts allowed); a 429 from the edge may not have a JSON body |
 
 Health endpoints and reads of `/trust/*` and `/audit/*` are not rate-limited by
 the node. Do not poll faster than you need: a new block arrives about every
@@ -87,6 +88,7 @@ Some endpoints answer differently, so check the HTTP status first:
 | GET | `/wallet/balance` | CELL balance of an address |
 | GET | `/wallet/nonce` | Last used nonce of an address |
 | GET | `/mining/account` | Balance and nonce in one call |
+| GET | `/wallet/history`, `/wallet/history/status` | Transaction history of an address, from the history index (not a node route) |
 | POST | `/wallet/submit-signed` | Submit an ML-DSA-87 signed transfer |
 | GET | `/wallet/recovery/capsules`, `/wallet/recovery/capsules/{locator}`, `/wallet/recovery/nonce` | Encrypted recovery capsules (read) |
 | GET | `/mining/work` | Current mining work (`api.qsdm.tech` only) |
@@ -360,6 +362,65 @@ Balance and nonce in one call:
 {"address":"5d28b825…20e7","balance":20.494531481334427,"nonce":1,"present":true}
 ```
 
+### Wallet history: `GET /wallet/history` and `GET /wallet/history/status`
+
+The transactions of an address, newest first, from block 0 to the tip: what it
+sent, the transfers it received and the mining rewards paid to it. These two
+routes are served on `api.qsdm.tech` and `qsdm.tech` by a **read-only history
+index** that runs beside the chain and reads the node's receipts. They are not
+routes of the node in this repository: a full node's own API does not have
+them, and they are described in their own file,
+[`openapi-wallet-history.yaml`](openapi-wallet-history.yaml).
+
+```text
+GET /wallet/history?address={address}&limit={n}&before={cursor}&kind={kind}
+```
+
+| Parameter | Detail |
+|---|---|
+| `address` | Required. 64 lowercase hex characters. |
+| `limit` | 1 to 200, default 50. |
+| `kind` | `all` (default); `transfers`: everything the address sent, and the wallet transfers (`qsdm/wallet-transfer/v1`) it received; `rewards`: the mining rewards (`qsdm/mining-reward/v1`) it received. |
+| `before` | The `next_before` of the previous page, for the next older page. Opaque. |
+
+```json
+{"address":"5d28b825…20e7","indexed_tip":1196849,"chain_tip":1196849,
+ "items":[{"tx_id":"solo-reward-560022-5d28b825…20e7","height":327003,"time":"2026-07-22T01:42:10.164648234Z",
+           "kind":"reward","contract":"qsdm/mining-reward/v1","from":"qsdm-system-funder","to":"5d28b825…20e7",
+           "amount":0.021870612699386505,"fee":0,"status":1,"index":0}],
+ "next_before":"MzI3MDAzLjMuMC40MzYzNjg"}
+```
+
+- Items are ordered by height, then by the transaction's place in its block,
+  then by log index. `next_before` names the last item's place in that order,
+  so a page never shifts when new blocks arrive; it is `null` on the last page.
+- `kind` is seen from the queried address: `send` when it is the sender (any
+  contract, enrollments included), `receive` for a wallet transfer to it,
+  `reward` for a mining reward to it, `other` for anything else sent to it.
+- `amount` and `fee` are CELL, as the receipts carry them. `status` 1 means
+  applied; failed transactions and heartbeats are not listed. `(tx_id, index)`
+  names an item (`index` is the log's index in its receipt). `from` can be a
+  system account such as `qsdm-system-funder`, and `to` can be `null`.
+- `indexed_tip` is the last block the index has read completely. While it is
+  below `chain_tip`, the newest blocks are not in the answer yet.
+
+`GET /wallet/history/status` reports the index's progress:
+
+```json
+{"indexed_tip":1196849,"chain_tip":1196849,"rows":2008289,"behind":0}
+```
+
+`rows` counts the transaction logs indexed; `behind` is the number of blocks
+not read yet.
+
+Both routes answer GET and HEAD only, with `Cache-Control: no-store` and **no
+CORS headers**: a page on another origin cannot read them, so call them from
+your server or from a page on qsdm.tech. Errors are JSON in the service's own
+shape, `{"error":"bad_request","message":"limit must be a whole number from 1 to 200"}`:
+400 for bad input (a missing or malformed `address`, `limit` out of range, an
+unknown `kind`, a `before` that is not a `next_before`, an unknown or repeated
+parameter) and 503 with `Retry-After` when the service is busy.
+
 ### `POST /wallet/submit-signed`
 
 Submits a CELL transfer that you signed yourself with ML-DSA-87. No login is
@@ -555,3 +616,8 @@ read-only follower node answers with 503. The operator-only admin API under
 `QSDM/source/pkg/api` fails when the file and the registered routes drift
 apart. The file describes the code; for what the live pilot network accepts
 today, this page is right.
+
+[`openapi-wallet-history.yaml`](openapi-wallet-history.yaml) describes the
+two wallet history routes (`/wallet/history` and `/wallet/history/status`).
+The history index beside the chain serves them, not the node, so they are kept
+out of `openapi.yaml` and the drift test does not cover them.
