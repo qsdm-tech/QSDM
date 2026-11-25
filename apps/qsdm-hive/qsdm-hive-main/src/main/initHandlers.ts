@@ -87,6 +87,7 @@ const endpointToControllerMap: Record<
   [Endpoints.RENAME_QSDM_WALLET]: controllers.renameQsdmWalletController,
   [Endpoints.FORGET_QSDM_WALLET]: controllers.forgetQsdmWalletController,
   [Endpoints.RECOVER_QSDM_WALLET]: controllers.recoverQsdmWalletController,
+  [Endpoints.GET_QSDM_WALLET_HISTORY]: controllers.getQsdmWalletHistory,
   [Endpoints.EXPORT_QSDM_SIGNER_WALLET_BACKUP]:
     controllers.exportQsdmSignerWalletBackup,
   [Endpoints.EXPORT_QSDM_SIGNER_RECOVERY_WORDS]:
@@ -135,6 +136,7 @@ const endpointToControllerMap: Record<
   [Endpoints.GET_HIVE_VERSION_POLICY]: controllers.getHiveVersionPolicy,
   [Endpoints.ARCHIVE_TASK]: controllers.archiveTask,
   [Endpoints.DOWNLOAD_APP_UPDATE]: controllers.downloadAppUpdate,
+  [Endpoints.RESTART_TO_UPDATE]: controllers.restartToUpdate,
   [Endpoints.CHECK_APP_UPDATE]: controllers.checkAppUpdate,
   [Endpoints.GET_PLATFORM]: controllers.getPlatform,
   [Endpoints.STORE_ALL_TIME_REWARDS]: controllers.storeAllTimeRewards,

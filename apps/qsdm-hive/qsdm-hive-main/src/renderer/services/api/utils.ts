@@ -24,6 +24,7 @@ import type {
   QsdmWalletProviderRevokeRequest,
   QsdmWalletActivateRequest,
   QsdmWalletForgetRequest,
+  QsdmWalletHistoryRequest,
   QsdmWalletRecoverRequest,
   QsdmWalletRenameRequest,
 } from 'models/api/qsdm';
@@ -246,6 +247,12 @@ export const forgetQsdmWallet = async (payload: QsdmWalletForgetRequest) => {
 
 export const recoverQsdmWallet = async (payload: QsdmWalletRecoverRequest) => {
   return window.main.recoverQsdmWallet(payload);
+};
+
+export const getQsdmWalletHistory = async (
+  payload: QsdmWalletHistoryRequest
+) => {
+  return window.main.getQsdmWalletHistory(payload);
 };
 
 export const importQsdmSignerWallet = async (

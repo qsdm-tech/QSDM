@@ -32,7 +32,8 @@ bash install-full-node.sh --from-website
 `--from-website` reads the values to pin from https://qsdm.tech/fullnode.html and prints them: compare them with the
 page in your browser. To give the values yourself instead, pass each one as a flag (`--help` lists them). If the
 block maker has changed since the release, the page also shows the block-maker schedule, and the script puts it
-into the node's `core.toml` (see "When the block maker changes" below).
+into the node's `core.toml`, one block maker at a time as the node catches up past each hand-over block (see "When
+the block maker changes" below).
 
 - If a check fails, the script says what did not match and what to do. Once that is fixed, run the same command
   again: it carries on where it stopped, and it never deletes chain data.
@@ -349,6 +350,13 @@ Until your node has it, it stays at the old block maker's last block: its tip st
 `external block producer is not authorized` for the next block, and the watch reports `node-stalled`. Nothing is lost:
 with the new schedule the node carries on from where it stopped.
 
+A node starts only with a chain that reaches the last hand-over block of its schedule (the block before the last
+block maker's first; [Producer transition](PRODUCER_TRANSITION.md)). A node whose chain is behind it, such as a new
+node that starts from the 880,376 snapshot, therefore takes the schedule one block maker at a time: first the block
+makers its chain already reaches, then each next one when the node has reached that block maker's hand-over block,
+where it waits by itself. For the schedule of 13 November that is the release's schedule up to block 1,095,601, the
+third block maker up to block 1,095,784, then all four. `install-full-node.sh` does this for you (below).
+
 qsdm.tech/fullnode.html then shows the new schedule under "Block makers", as the exact text of the table, with its
 digest. For a node set up with `install-full-node.sh`:
 
@@ -363,13 +371,24 @@ names the last block maker in `authorized_block_producers` (see [Private P2P mod
 restarts the node. Nothing else in the file changes. If systemd then reports the node as failed, the old file goes back
 and the node is restarted with it. Last, it checks your node against the network as in step 7 and says when your node
 has passed the new block maker's first block. `--dry-run` shows the plan first. To use a schedule you saved from the
-page, pass `--producer-schedule FILE` instead of `--from-website`. A new install with `--from-website` takes the
-schedule from the page by itself.
+page, pass `--producer-schedule FILE` instead of `--from-website`.
+
+When your node's chain does not reach a new block maker's hand-over block yet, the script puts in only the block makers
+it reaches (none, if the node is simply behind) and keeps the whole schedule in
+`/etc/qsdm-follower/producer-schedule.toml`. A timer, `qsdm-follower-schedule.timer`, then runs a copy of the script
+(`/opt/qsdm-follower/install-full-node.sh --continue-schedule`) every 10 minutes: when the node has reached the next
+hand-over block, it puts that block maker in the same way (old file kept, restart, check against the network); when
+every block maker is in, it removes itself. If the node does not start with the next part, the old file goes back and
+the timer is removed; its log (`journalctl -u qsdm-follower-schedule`) says why. A new install with `--from-website`
+takes the schedule from the page the same way: the node starts with the block makers up to the snapshot, and the timer
+adds the others as the node catches up (for the 880,376 snapshot, at blocks 1,095,601 and 1,095,784; the catch-up to
+there takes a few hours). Keep the installer's work folder until the timer is gone.
 
 By hand: replace the `[consensus.producer_transition]` table of `/etc/qsdm-follower/core.toml` (its header line and
 every line of it, up to the next table) with the schedule from the page, set `authorized_block_producers` to the last
 `producer_id` in it, and restart the node (`sudo systemctl restart qsdm-follower`). The node checks the schedule when it
-starts and refuses one that breaks its rules.
+starts and refuses one that breaks its rules, and one whose last hand-over block its chain does not reach yet: then put
+in the table only up to the block maker whose hand-over block the node has, and the next one when it gets there.
 
 ## Security notes
 

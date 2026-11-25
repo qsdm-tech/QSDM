@@ -1,4 +1,7 @@
-import { getTaskBalanceEligibility } from './taskBalanceEligibility';
+import {
+  getTaskBalanceEligibility,
+  isQsdmMinerBondFromRewards,
+} from './taskBalanceEligibility';
 
 const CELL = 1_000_000_000;
 
@@ -53,6 +56,54 @@ describe('getTaskBalanceEligibility', () => {
     ).toMatchObject({
       hasEnoughBalanceForStaking: true,
       hasEnoughNativeTokens: true,
+    });
+  });
+
+  describe('isQsdmMinerBondFromRewards', () => {
+    const filling = {
+      ready: true,
+      bondMode: 'mining_rewards' as const,
+      fullyBonded: false,
+    };
+
+    it('counts an active "Use mining earnings" bond that is not fully bonded', () => {
+      // Even when the network status is not known (offline, HTTP 429).
+      expect(isQsdmMinerBondFromRewards({ enrollment: filling })).toBe(true);
+      expect(
+        isQsdmMinerBondFromRewards({
+          networkOffersDeferredBond: false,
+          enrollment: filling,
+        })
+      ).toBe(true);
+    });
+
+    it('stops counting the enrollment once it is fully bonded', () => {
+      expect(
+        isQsdmMinerBondFromRewards({
+          enrollment: { ...filling, fullyBonded: true },
+        })
+      ).toBe(false);
+      expect(
+        isQsdmMinerBondFromRewards({
+          networkOffersDeferredBond: true,
+          enrollment: { ...filling, fullyBonded: true },
+        })
+      ).toBe(true);
+    });
+
+    it('ignores upfront and inactive enrollments', () => {
+      expect(
+        isQsdmMinerBondFromRewards({
+          enrollment: { ready: true, bondMode: 'upfront', fullyBonded: false },
+        })
+      ).toBe(false);
+      expect(
+        isQsdmMinerBondFromRewards({ enrollment: { ...filling, ready: false } })
+      ).toBe(false);
+      expect(isQsdmMinerBondFromRewards({})).toBe(false);
+      expect(
+        isQsdmMinerBondFromRewards({ networkOffersDeferredBond: true })
+      ).toBe(true);
     });
   });
 

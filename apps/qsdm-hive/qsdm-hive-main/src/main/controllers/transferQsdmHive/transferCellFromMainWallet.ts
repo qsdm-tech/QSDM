@@ -22,12 +22,13 @@ export const transferCellFromMainWallet = async (
   event: Event,
   payload: TransferCellParam
 ): Promise<QsdmSubmitSignedTransactionResponse | void> => {
-  const { accountName, amount, toWalletAddress } = payload;
+  const { accountName, amount, toWalletAddress, fromAddress } = payload;
 
   if (QSDM_TASK_RUNTIME_MODE === 'qsdm-native') {
     return submitQsdmWalletTransferIntent({
       amount,
       recipient: toWalletAddress.trim(),
+      expectedSender: fromAddress,
     });
   }
 

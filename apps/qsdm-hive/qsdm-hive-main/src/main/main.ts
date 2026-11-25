@@ -43,6 +43,7 @@ import { configureMainWindowSecurity } from './security/externalNavigation';
 import { trackEvent } from './services/analytics';
 import ExecutableMonitor from './services/ExecutableMonitorService';
 import qsdmHiveTasks from './services/qsdmHiveTasks';
+import { installQsdmRateLimitRetry } from './services/qsdmHttpRetry';
 import {
   cleanupQsdmSignerSecretStore,
   initializeQsdmSignerSecretStore,
@@ -603,6 +604,8 @@ const installExtensions = async () => {
 };
 
 const main = async (): Promise<void> => {
+  // Before any API call: one shared retry for HTTP 429 (qsdmHttpRetry).
+  installQsdmRateLimitRetry();
   initHandlers();
 
   if (isProductionRuntime && !isSmokeTest) {

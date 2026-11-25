@@ -9,20 +9,20 @@ All downloads are linked from **[qsdm.tech/download.html](https://qsdm.tech/down
 
 | Product | Version | Platform | File | Size | SHA-256 |
 |---|---|---|---|---|---|
-| QSDM Hive | 1.4.25 | Windows x64 | `qsdm-hive-1.4.25-win-x64.exe` | 128.8 MB | `d33c0561259b7916f4c890d76fea866d9f27bb7a96c481a6fcb12b6b0b516f77` |
-| QSDM Hive | 1.4.25 | Linux x86-64 | `qsdm-hive-1.4.25-linux-x86_64.AppImage` | 166.6 MB | `d29b9acd0609cfa7cbdf5ea3b529bc040d622cb2b47bc95490588b299e307d8d` |
-| QSDM Hive | 1.4.25 | Linux x86-64 | `qsdm-hive-1.4.25-linux-x64.tar.gz` | 157.6 MB | `bd7261bf6d6c98741b3a49302840df440f9fed8100715cf7a36b03ed16a9d216` |
-| QSDM Hive | 1.4.25 | macOS 12+ (Apple silicon and Intel) | `qsdm-hive-1.4.25-mac-universal.dmg` | 244.1 MB | `7dbe14c2d0a075b6bbaf7e130426a8aafb9a798ccc25134aca0759b2c3e2f28e` |
-| QSDM Hive | 1.4.25 | macOS 12+ (Apple silicon and Intel) | `qsdm-hive-1.4.25-mac-universal.zip` | 243.6 MB | `ba6adf104d3be49a011aba1302f8f4f9fcefb5875c17972c7c8965d256097b3f` |
+| QSDM Hive | 1.4.27 | Windows x64 | `qsdm-hive-1.4.27-win-x64.exe` | 133.7 MB | `99b6d29cb3ea3aa3e2b06a2e6299d1c9ec1866f242d54d8cfc79e60db653b387` |
+| QSDM Hive | 1.4.27 | Linux x86-64 | `qsdm-hive-1.4.27-linux-x86_64.AppImage` | 169.2 MB | `b1cbda7ae585b37598c38944c596f83f2a5d8c570b39c21c63e4e1fb6c838c72` |
+| QSDM Hive | 1.4.27 | Linux x86-64 | `qsdm-hive-1.4.27-linux-x64.tar.gz` | 160.1 MB | `5b8173fb81a888a9d69b45edf1b93b576665475acb1ea9dd1097359462062528` |
+| QSDM Hive | 1.4.27 | macOS 12+ (Apple silicon and Intel) | `qsdm-hive-1.4.27-mac-universal.dmg` | 250.1 MB | `679f0220d65e19089caacbd5a3c222f16b336eb754bdbc3b3b8ec9ec06f802ac` |
+| QSDM Hive | 1.4.27 | macOS 12+ (Apple silicon and Intel) | `qsdm-hive-1.4.27-mac-universal.zip` | 249.6 MB | `a1dd876013be5bb00a355472d1a926dd4b41f0f7f6b95d0752bec484ee9619c7` |
 
-Hive 1.4.25 (published 19 November 2026) is served from the release channel
+Hive 1.4.27 (published 23 November 2026) is served from the release channel
 `https://qsdm.tech/downloads/hive-v2/`, together with checksum files
-(`SHA256SUMS-win.txt`, `qsdm-hive-1.4.25-linux-SHA256SUMS.txt`) and the signed
+(`SHA256SUMS-win.txt`, `qsdm-hive-1.4.27-linux-SHA256SUMS.txt`) and the signed
 release manifests (`qsdm-hive-release-windows-v2.json`,
 `qsdm-hive-release-linux-v2.json`).
 
-Hive 1.4.25 for macOS (published 19 November 2026) is the GitHub release
-[`hive-macos-v1.4.25`](https://github.com/qsdm-tech/QSDM/releases/tag/hive-macos-v1.4.25),
+Hive 1.4.27 for macOS (published 23 November 2026) is the GitHub release
+[`hive-macos-v1.4.27`](https://github.com/qsdm-tech/QSDM/releases/tag/hive-macos-v1.4.27),
 with the checksum file `SHA256SUMS-mac.txt`. It is signed with QSDM's Apple
 Developer ID (team `2YUCLJRGYL`) and notarized by Apple. It has no QSDM-native
 release manifest: macOS checks the Apple signature and the notarization when
@@ -47,9 +47,9 @@ the producer's exact `qsdm`. The one-command installer,
 needs 6 GB of RAM. See [Run a full node](RUN_A_FULL_NODE.md).
 
 > [!IMPORTANT]
-> **Upgrading from Hive 1.4.20 (Windows) or 1.4.17 (Linux):** install 1.4.25 by
+> **Upgrading from Hive 1.4.20 (Windows) or 1.4.17 (Linux):** install 1.4.27 by
 > hand once. Those versions trust the previous release key, which was rotated, so
-> they cannot verify 1.4.25 on their own. Your wallet and settings are kept.
+> they cannot verify 1.4.27 on their own. Your wallet and settings are kept.
 > Hive 1.4.17 stopped working after 9 November 2026; 1.4.20 stops after
 > 19 December 2026.
 
@@ -61,20 +61,20 @@ not match, delete the file and download it again from qsdm.tech.
 **Windows (PowerShell):**
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\qsdm-hive-1.4.25-win-x64.exe
+Get-FileHash -Algorithm SHA256 .\qsdm-hive-1.4.27-win-x64.exe
 ```
 
 **Linux:**
 
 ```bash
-curl -fsSLO https://qsdm.tech/downloads/hive-v2/qsdm-hive-1.4.25-linux-SHA256SUMS.txt
-sha256sum -c --ignore-missing qsdm-hive-1.4.25-linux-SHA256SUMS.txt
+curl -fsSLO https://qsdm.tech/downloads/hive-v2/qsdm-hive-1.4.27-linux-SHA256SUMS.txt
+sha256sum -c --ignore-missing qsdm-hive-1.4.27-linux-SHA256SUMS.txt
 ```
 
 **macOS (Terminal):**
 
 ```bash
-shasum -a 256 qsdm-hive-1.4.25-mac-universal.dmg
+shasum -a 256 qsdm-hive-1.4.27-mac-universal.dmg
 ```
 
 ## What Hive checks for you

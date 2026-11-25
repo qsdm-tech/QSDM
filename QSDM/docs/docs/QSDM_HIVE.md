@@ -6,33 +6,40 @@ GPU, or RAM participation. Agent, Relay, and Edge Control programs run in the
 background or help with local setup. They are not alternative QSDM clients and
 do not hold a user wallet.
 
-## Current version: Hive 1.4.25
+## Current version: Hive 1.4.27
 
+- New in Hive 1.4.27: Hive runs only tasks the QSDM task catalog lists and never
+  downloads task code, task files stay inside their folders, task thumbnails come
+  over verified HTTPS only, wallet errors to web pages carry no local paths, and
+  Electron is 43.8.12.
+- New in Hive 1.4.26: Recent transactions for the active wallet (Settings > Wallet),
+  a wallet switch that never shows or sends with the previous wallet, the QSDM Bug
+  Bounty row in the task list, mining fixes and a Restart to update banner.
 - New in Hive 1.4.25: several wallets in one Hive (Create, Import and Restore add a wallet,
   never replace one; Settings > Wallet > Wallets; a wallet an earlier import replaced
   comes back under Recovered wallets).
 - New in Hive 1.4.24: one-click pool mining with PULSE, the **QSDM Pool Miner** task
   ([PULSE](PULSE.md), [qsdm.tech/pool](https://qsdm.tech/pool)).
-- Hive 1.4.25 is the current release for Windows x64 and Linux x86-64
-  (published 19 November 2026). It is published on the hive-v2 release
+- Hive 1.4.27 is the current release for Windows x64 and Linux x86-64
+  (published 23 November 2026). It is published on the hive-v2 release
   channel,
   `https://qsdm.tech/downloads/hive-v2/`, and its release records are signed
   with QSDM's v2 release key. The earlier release key was rotated in October
   2026.
-- Hive 1.4.25 for macOS 12 or newer (one app for Apple silicon and Intel) was
-  published on 19 November 2026 as the GitHub release
-  [`hive-macos-v1.4.25`](https://github.com/qsdm-tech/QSDM/releases/tag/hive-macos-v1.4.25).
+- Hive 1.4.27 for macOS 12 or newer (one app for Apple silicon and Intel) was
+  published on 23 November 2026 as the GitHub release
+  [`hive-macos-v1.4.27`](https://github.com/qsdm-tech/QSDM/releases/tag/hive-macos-v1.4.27).
   It is signed with QSDM's Apple Developer ID and notarized by Apple. On a Mac,
   Hive is the wallet and runs tasks; it does not mine. See [macOS](#macos).
 - Because of the key rotation, Hive 1.4.20 (Windows) and 1.4.17 (Linux) cannot
-  update themselves to 1.4.25. Install 1.4.25 once by hand from the
+  update themselves to 1.4.27. Install 1.4.27 once by hand from the
   [download page](https://qsdm.tech/download.html); your wallet and settings
   are kept. Check the file first as described in
   [Downloads & verification](DOWNLOADS_AND_VERIFICATION.md).
 - Edge Control ships with Hive.
 - Since 1.4.22, Hive adds [Proof-of-Entanglement](PROOF_OF_ENTANGLEMENT.md)
   parents to every transfer, which the network requires since block 816,600.
-  Hive 1.4.20 users must install 1.4.25 by hand before 19 December 2026.
+  Hive 1.4.20 users must install 1.4.27 by hand before 19 December 2026.
 - Hive signs mining proofs automatically with your wallet (the miner
   operator signature). The wallet must be unlocked in Hive to mine; a locked
   wallet shows "Unlock your QSDM wallet in Hive to mine."
@@ -132,7 +139,7 @@ creating a second stake or transfer.
 Hive for macOS needs macOS 12 (Monterey) or newer. One app runs on Apple
 silicon and Intel Macs. Download the `.dmg` from the
 [download page](https://qsdm.tech/download.html) or the GitHub release
-[`hive-macos-v1.4.25`](https://github.com/qsdm-tech/QSDM/releases/tag/hive-macos-v1.4.25),
+[`hive-macos-v1.4.27`](https://github.com/qsdm-tech/QSDM/releases/tag/hive-macos-v1.4.27),
 open it and drag **QSDM Hive** to **Applications**. The app is signed with
 QSDM's Apple Developer ID (team `2YUCLJRGYL`) and notarized by Apple, so it opens
 with a double-click. Check the file first as described in
@@ -270,7 +277,7 @@ Hive uses local services for the desktop app and node monitor. Public reachabili
 
 - [Download QSDM Hive](https://qsdm.tech/download.html)
 - [Downloads & verification](DOWNLOADS_AND_VERIFICATION.md)
-- [Mining today (Hive 1.4.25)](MINING_TODAY.md)
+- [Mining today (Hive 1.4.27)](MINING_TODAY.md)
 - [CELL tokenomics](CELL_TOKENOMICS.md)
 - [Sky Fang official website](https://skyfang.xyz/)
 - [Sky Fang integration notes](https://skyfang.xyz/docs)

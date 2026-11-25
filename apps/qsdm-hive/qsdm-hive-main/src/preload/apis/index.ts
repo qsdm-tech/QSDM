@@ -1,6 +1,12 @@
 import activateQsdmWallet from './activateQsdmWallet';
 import appRelaunch from './appRelaunch';
-import { checkAppUpdate, onAppDownloaded, onAppUpdate } from './appUpdates';
+import {
+  checkAppUpdate,
+  onAppDownloaded,
+  onAppUpdate,
+  onHiveUpdateRequired,
+  restartToUpdate,
+} from './appUpdates';
 import archiveTask from './archiveTask';
 import { resetPin } from './auth';
 import { fetchS3FolderContents } from './aws';
@@ -66,6 +72,7 @@ import {
   getQsdmReferralStatus,
 } from './getQsdmReferralStatus';
 import getQsdmSkyFangLinkStatus from './getQsdmSkyFangLinkStatus';
+import getQsdmWalletHistory from './getQsdmWalletHistory';
 import getQsdmWalletProviderPermissions from './getQsdmWalletProviderPermissions';
 import getRentAmount from './getRentAmount';
 import getRetryDataByTaskId from './getRetryDataByTaskId';
@@ -106,6 +113,7 @@ import {
 } from './notifications';
 import onDeepLinkNavigation from './onDeepLinkNavigation';
 import onK2ConnectionError from './onK2ConnectionError';
+import onQsdmWalletChanged from './onQsdmWalletChanged';
 import onSystemWakeUp from './onSystemWakeUp';
 import onVariablesUpdatedFromMainProcess from './onVariablesUpdatedFromMainProcess';
 import openBrowserWindow from './openBrowserWindow';
@@ -239,6 +247,8 @@ export default {
   renameQsdmWallet,
   forgetQsdmWallet,
   recoverQsdmWallet,
+  onQsdmWalletChanged,
+  getQsdmWalletHistory,
   restoreQsdmSignerWallet,
   unlockQsdmSignerWallet,
   getQsdmWalletProviderPermissions,
@@ -324,6 +334,8 @@ export default {
   onSystemWakeUp,
   getMainLogs,
   onAppDownloaded,
+  onHiveUpdateRequired,
+  restartToUpdate,
   checkAppUpdate,
   getStartedTasksPubKeys,
   upgradeTask,

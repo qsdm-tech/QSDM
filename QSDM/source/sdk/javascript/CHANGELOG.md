@@ -4,6 +4,14 @@ All notable changes to the published `qsdm-sdk` npm package are recorded here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- `QSDMClient` trims trailing slashes from `baseURL` in one linear pass.
+  The previous regex took quadratic time on a long run of slashes that
+  was not at the end of the string.
+
 ## [0.5.0] - 2026-11-07
 
 ### Added

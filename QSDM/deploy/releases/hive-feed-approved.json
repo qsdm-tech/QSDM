@@ -1,7 +1,7 @@
 {
   "schema": "qsdm.hive.feed-approved.v1",
-  "version": "1.4.25",
-  "source_commit": "1b98175efafc03b645033d29bd9c39555a269017",
-  "recorded": "2026-11-19",
+  "version": "1.4.27",
+  "source_commit": "710c926203ef72af82b233e87a105f683e8ccb79",
+  "recorded": "2026-11-23",
   "note": "The version and commit in the live hive-v2 feed's signed Windows and Linux manifests (release key v2). This release was built and signed outside the GitHub release-request flow, whose last request is 1.4.17. Update this record with every release published that way; the feed monitor expects the newer of this record and the request."
 }

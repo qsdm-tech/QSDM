@@ -4,11 +4,18 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import socket
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
 import _deploy_host
+
+try:
+    import paramiko
+except ImportError:  # the resolver tests run without paramiko
+    paramiko = None
 
 
 _ENV_KEYS = (
@@ -153,6 +160,179 @@ class DeploymentHostTests(unittest.TestCase):
             self.assertNotIn("https://api.qsdm.tech/api/v1", source, filename)
         vps_source = (deploy_dir / "install_ngc_sidecar_vps.py").read_text(encoding="utf-8")
         self.assertIn("port=resolved_target.port", vps_source)
+
+    def test_known_hosts_file_order(self) -> None:
+        base = Path(self.temp_dir.name)
+        explicit, from_env = base / "explicit_known_hosts", base / "env_known_hosts"
+        (base / "home" / ".ssh").mkdir(parents=True)
+        default = base / "home" / ".ssh" / "known_hosts"
+        for path in (explicit, from_env, default):
+            path.write_text("", encoding="utf-8")
+        os.environ["QSDM_SSH_KNOWN_HOSTS"] = str(from_env)
+        self.addCleanup(os.environ.pop, "QSDM_SSH_KNOWN_HOSTS", None)
+        with mock.patch.object(Path, "home", return_value=base / "home"):
+            self.assertEqual(_deploy_host.known_hosts_file(str(explicit)), explicit)
+            self.assertEqual(_deploy_host.known_hosts_file(), from_env)
+            os.environ.pop("QSDM_SSH_KNOWN_HOSTS")
+            self.assertEqual(_deploy_host.known_hosts_file(), default)
+
+    def test_missing_known_hosts_file_is_refused(self) -> None:
+        with self.assertRaisesRegex(_deploy_host.DeploymentTargetError, "Pin the host's SSH key first"):
+            _deploy_host.known_hosts_file(Path(self.temp_dir.name) / "missing")
+
+    def test_known_hosts_argument_is_split_from_positional_arguments(self) -> None:
+        self.assertEqual(_deploy_host.known_hosts_argument([]), (None, []))
+        self.assertEqual(_deploy_host.known_hosts_argument(["pw"]), (None, ["pw"]))
+        self.assertEqual(_deploy_host.known_hosts_argument(["--known-hosts", "kh", "pw"]), ("kh", ["pw"]))
+        self.assertEqual(_deploy_host.known_hosts_argument(["pw", "--known-hosts=kh"]), ("kh", ["pw"]))
+        for argv in (["--known-hosts"], ["--known-hosts="]):
+            with self.subTest(argv=argv):
+                with self.assertRaisesRegex(_deploy_host.DeploymentTargetError, "needs a file path"):
+                    _deploy_host.known_hosts_argument(argv)
+
+    def test_host_key_name_brackets_ports_other_than_22(self) -> None:
+        self.assertEqual(_deploy_host.host_key_name("vps.example", 22), "vps.example")
+        self.assertEqual(_deploy_host.host_key_name("vps.example", 2202), "[vps.example]:2202")
+
+    def test_no_deploy_script_trusts_an_unknown_host_key(self) -> None:
+        deploy_dir = Path(__file__).resolve().parent
+        pinned_by = {
+            "install_ngc_sidecar_oci.py": "pin_host_keys(c, args.known_hosts)",
+            "install_ngc_sidecar_vps.py": "pin_host_keys(c, args.known_hosts)",
+            "remote_bootstrap_paramiko.py": "_pin_host_keys(c, known_hosts)",
+            "remote_fix_service_paramiko.py": "_pin_host_keys(c, known_hosts)",
+            "remote_apply_paramiko.py": "_start_pinned_transport(t, HOST, PORT, known_hosts",
+            "remote_cmd_paramiko.py": "_start_pinned_transport(t, HOST, PORT, known_hosts",
+            "remote_harden_ssh_paramiko.py": "_start_pinned_transport(t, HOST, PORT, known_hosts",
+            "remote_install_caddy_paramiko.py": "_start_pinned_transport(t, HOST, PORT, known_hosts",
+            "remote_verify_paramiko.py": "_start_pinned_transport(t, HOST, PORT, known_hosts",
+        }
+        for path in sorted(deploy_dir.glob("*.py")):
+            if path.name in ("_deploy_host.py", "test_deploy_host.py"):
+                continue
+            source = path.read_text(encoding="utf-8")
+            with self.subTest(file=path.name):
+                self.assertNotIn("AutoAddPolicy", source)
+                self.assertNotIn("WarningPolicy", source)
+                self.assertNotIn(".start_client(", source)
+                if "import paramiko" in source or "from paramiko" in source:
+                    self.assertIn(path.name, pinned_by, "a paramiko deploy script must pin host keys")
+                    self.assertIn(pinned_by[path.name], source)
+
+
+if paramiko is not None:
+
+    class _PasswordServer(paramiko.ServerInterface):
+        def __init__(self, attempts: list[str]) -> None:
+            self.attempts = attempts
+
+        def get_allowed_auths(self, username: str) -> str:
+            return "password"
+
+        def check_auth_password(self, username: str, password: str) -> int:
+            self.attempts.append(username)
+            return paramiko.AUTH_SUCCESSFUL if password == "pw" else paramiko.AUTH_FAILED
+
+
+@unittest.skipUnless(paramiko is not None, "paramiko is not installed")
+class HostKeyPinningTests(unittest.TestCase):
+    """Real SSH handshakes against a local paramiko server on 127.0.0.1."""
+
+    def setUp(self) -> None:
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        self.known_hosts_path = Path(temp_dir.name) / "known_hosts"
+        self.auth_attempts: list[str] = []
+        self.server_transports: list = []
+        self.host_keys = [paramiko.ECDSAKey.generate()]
+        self.listener = socket.socket()
+        self.listener.bind(("127.0.0.1", 0))
+        self.listener.listen()
+        self.port = self.listener.getsockname()[1]
+        threading.Thread(target=self._serve, daemon=True).start()
+        self.addCleanup(self._stop)
+
+    def _serve(self) -> None:
+        while True:
+            try:
+                conn, _ = self.listener.accept()
+            except OSError:
+                return
+            transport = paramiko.Transport(conn)
+            for key in self.host_keys:
+                transport.add_server_key(key)
+            self.server_transports.append(transport)
+            try:
+                transport.start_server(server=_PasswordServer(self.auth_attempts))
+            except Exception:  # the client hung up during the handshake
+                transport.close()
+
+    def _stop(self) -> None:
+        self.listener.close()
+        for transport in self.server_transports:
+            transport.close()
+
+    def write_known_hosts(self, key=None, name: str | None = None) -> str:
+        keys = paramiko.HostKeys()
+        key = key or self.host_keys[0]
+        keys.add(name or f"[127.0.0.1]:{self.port}", key.get_name(), key)
+        keys.save(str(self.known_hosts_path))
+        return str(self.known_hosts_path)
+
+    def client_connect(self, known_hosts: str):
+        client = paramiko.SSHClient()
+        self.addCleanup(client.close)
+        _deploy_host.pin_host_keys(client, known_hosts)
+        client.connect(
+            "127.0.0.1", port=self.port, username="root", password="pw",
+            allow_agent=False, look_for_keys=False, timeout=10,
+        )
+        return client
+
+    def transport_connect(self, known_hosts: str):
+        transport = paramiko.Transport(socket.create_connection(("127.0.0.1", self.port), timeout=10))
+        self.addCleanup(transport.close)
+        _deploy_host.start_pinned_transport(transport, "127.0.0.1", self.port, known_hosts, timeout=10)
+        transport.auth_password("root", "pw")
+        return transport
+
+    def test_client_connects_to_a_pinned_host(self) -> None:
+        client = self.client_connect(self.write_known_hosts())
+        self.assertTrue(client.get_transport().is_authenticated())
+
+    def test_client_refuses_an_unknown_host(self) -> None:
+        with self.assertRaisesRegex(paramiko.SSHException, "not found in known_hosts"):
+            self.client_connect(self.write_known_hosts(name="other.example"))
+        self.assertEqual(self.auth_attempts, [])
+
+    def test_client_refuses_a_changed_key(self) -> None:
+        with self.assertRaises(paramiko.BadHostKeyException):
+            self.client_connect(self.write_known_hosts(key=paramiko.ECDSAKey.generate()))
+        self.assertEqual(self.auth_attempts, [])
+
+    def test_transport_connects_to_a_pinned_host(self) -> None:
+        transport = self.transport_connect(self.write_known_hosts())
+        self.assertTrue(transport.is_authenticated())
+        self.assertEqual(self.auth_attempts, ["root"])
+
+    def test_transport_refuses_an_unknown_host(self) -> None:
+        with self.assertRaisesRegex(_deploy_host.DeploymentTargetError, "refusing an unknown host"):
+            self.transport_connect(self.write_known_hosts(name="other.example"))
+        self.assertEqual(self.auth_attempts, [])
+
+    def test_transport_refuses_a_changed_key_before_sending_the_password(self) -> None:
+        with self.assertRaisesRegex(_deploy_host.DeploymentTargetError, "does not match"):
+            self.transport_connect(self.write_known_hosts(key=paramiko.ECDSAKey.generate()))
+        self.assertEqual(self.auth_attempts, [])
+
+    def test_transport_asks_for_the_pinned_rsa_key(self) -> None:
+        # The server also offers ECDSA, which paramiko would pick by default.
+        rsa_key = paramiko.RSAKey.generate(2048)
+        self.host_keys.append(rsa_key)
+        transport = self.transport_connect(self.write_known_hosts(key=rsa_key))
+        self.assertTrue(transport.is_authenticated())
+        self.assertEqual(transport.get_remote_server_key().get_name(), "ssh-rsa")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

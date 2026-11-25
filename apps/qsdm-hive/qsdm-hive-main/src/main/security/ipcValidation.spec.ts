@@ -76,6 +76,52 @@ describe('QSDM Hive IPC validation', () => {
         },
       ])
     ).toThrow(/amount is below/);
+
+    expect(() =>
+      validateIpcPayload(Endpoints.TRANSFER_CELL_FROM_MAIN_WALLET, [
+        {
+          accountName: 'Blackbeard',
+          amount: 1,
+          toWalletAddress: validAddress,
+          fromAddress: validAddress,
+        },
+      ])
+    ).not.toThrow();
+
+    expect(() =>
+      validateIpcPayload(Endpoints.TRANSFER_CELL_FROM_MAIN_WALLET, [
+        {
+          accountName: 'Blackbeard',
+          amount: 1,
+          toWalletAddress: validAddress,
+          fromAddress: '../not-a-wallet',
+        },
+      ])
+    ).toThrow(/fromAddress has an invalid format/);
+  });
+
+  it('accepts only a wallet address, a known list and a bounded page for Recent transactions', () => {
+    const address = 'a'.repeat(64);
+    expect(() =>
+      validateIpcPayload(Endpoints.GET_QSDM_WALLET_HISTORY, [
+        { address, kind: 'rewards', before: 'cursor-1', limit: 50 },
+      ])
+    ).not.toThrow();
+    expect(() =>
+      validateIpcPayload(Endpoints.GET_QSDM_WALLET_HISTORY, [
+        { address: '../wallet' },
+      ])
+    ).toThrow(/address/);
+    expect(() =>
+      validateIpcPayload(Endpoints.GET_QSDM_WALLET_HISTORY, [
+        { address, kind: 'all' },
+      ])
+    ).toThrow(/kind must be transfers or rewards/);
+    expect(() =>
+      validateIpcPayload(Endpoints.GET_QSDM_WALLET_HISTORY, [
+        { address, limit: 201 },
+      ])
+    ).toThrow(/limit is above/);
   });
 
   it('rejects unsupported signed task actions', () => {

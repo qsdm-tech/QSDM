@@ -208,6 +208,9 @@ const validateTransfer = (endpoint: string, payload: unknown) => {
   ensureString(endpoint, object, 'toWalletAddress', {
     pattern: SAFE_ADDRESS,
   });
+  ensureOptionalString(endpoint, object, 'fromAddress', {
+    pattern: SAFE_ADDRESS,
+  });
 };
 
 const validateSignedTransaction = (endpoint: string, payload: unknown) => {
@@ -583,6 +586,21 @@ export const validateIpcPayload = (
       ensureOptionalString(endpoint, object, 'label', { max: 40 });
       break;
     }
+    case Endpoints.GET_QSDM_WALLET_HISTORY: {
+      const object = ensureObject(endpoint, payload);
+      ensureWalletAddress(endpoint, object, 'address');
+      const kind = ensureOptionalString(endpoint, object, 'kind', { max: 16 });
+      if (kind !== undefined && kind !== 'transfers' && kind !== 'rewards') {
+        invalid(endpoint, 'kind must be transfers or rewards');
+      }
+      ensureOptionalString(endpoint, object, 'before', { max: 512 });
+      ensureOptionalNumber(endpoint, object, 'limit', {
+        min: 1,
+        max: 200,
+        integer: true,
+      });
+      break;
+    }
     case Endpoints.EXPORT_QSDM_SIGNER_RECOVERY_WORDS: {
       const object = ensureObject(endpoint, payload);
       ensureString(endpoint, object, 'passphrase', { min: 1, max: 4096 });
@@ -668,6 +686,7 @@ export const validateIpcPayload = (
     case Endpoints.GET_QSDM_VIRTUAL_COMPUTE_JOBS:
     case Endpoints.GET_QSDM_BOUNTY_LEDGER:
     case Endpoints.QUIT_APP:
+    case Endpoints.RESTART_TO_UPDATE:
       ensureNoPayload(endpoint, args);
       break;
     default:

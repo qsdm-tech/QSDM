@@ -1,7 +1,10 @@
 # Apply local source + config to VPS (Major Update edition).
 #
 # Usage:
-#   $env:QSDM_VPS_PASS="..."; python QSDM/deploy/remote_apply_paramiko.py
+#   $env:QSDM_VPS_PASS="..."; python QSDM/deploy/remote_apply_paramiko.py [--known-hosts FILE]
+#
+# The VPS host key must already be in known_hosts (--known-hosts FILE, else
+# QSDM_SSH_KNOWN_HOSTS, else ~/.ssh/known_hosts); unknown hosts are refused.
 #
 # What changed vs the pre-Major-Update version of this script:
 #
@@ -53,7 +56,14 @@ from pathlib import Path
 import paramiko
 from paramiko import Transport
 
-from _deploy_host import host as _host, port as _port, require_root_user as _require_root_user, user as _user
+from _deploy_host import (
+    host as _host,
+    known_hosts_argument as _known_hosts_argument,
+    port as _port,
+    require_root_user as _require_root_user,
+    start_pinned_transport as _start_pinned_transport,
+    user as _user,
+)
 
 HOST = _host()
 USER = _user()
@@ -325,12 +335,13 @@ def _connect() -> Transport:
     a password on every redeploy just because the pubkey path was not
     obvious to the script.
     """
-    pw = os.environ.get("QSDM_VPS_PASS") or (sys.argv[1] if len(sys.argv) > 1 else "")
+    known_hosts, args = _known_hosts_argument(sys.argv[1:])
+    pw = os.environ.get("QSDM_VPS_PASS") or (args[0] if args else "")
     key_path = Path(os.environ.get("USERPROFILE", os.environ.get("HOME", ""))) / ".ssh" / "id_ed25519"
 
     sock = socket.create_connection((HOST, PORT), timeout=30)
     t = Transport(sock)
-    t.start_client(timeout=30)
+    _start_pinned_transport(t, HOST, PORT, known_hosts, timeout=30)
 
     authed = False
     if key_path.is_file():

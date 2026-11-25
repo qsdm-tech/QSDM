@@ -22,6 +22,7 @@ import {
   getQsdmTaskActionSender,
   getQsdmTaskActionSignerMode,
 } from './qsdmTaskActionSigner';
+import { recordQsdmWalletSend } from './qsdmWalletHistory';
 
 type UnsignedQsdmWalletEnvelope = Omit<
   QsdmSignedTransactionEnvelope,
@@ -35,11 +36,54 @@ type QsdmWalletTransferParams = {
   recipient: string;
   amount: number;
   fee?: number;
+  /** The sender address the screen showed; the send is refused when another wallet is active now. */
+  expectedSender?: string;
 };
 
 type QsdmWalletTransferConflict = 'nonce' | 'pending';
 
+export const QSDM_ACTIVE_WALLET_CHANGED_MESSAGE =
+  'The active wallet changed. Check the amount and send again.';
+
 let walletTransferQueue: Promise<void> = Promise.resolve();
+// Sends queued or running. A wallet switch is refused while any is, so a send never mixes two wallets.
+let walletTransfersInProgress = 0;
+
+export const isQsdmWalletTransferInProgress = () =>
+  walletTransfersInProgress > 0;
+
+const sameWalletAddress = (left?: string, right?: string) =>
+  !!left?.trim() && left.trim().toLowerCase() === right?.trim().toLowerCase();
+
+// The signer files are the ACTIVE wallet's: nothing is signed for an address that is no longer active.
+const assertActiveWalletSender = (sender?: string) => {
+  if (!sameWalletAddress(sender, getQsdmTaskActionSender())) {
+    throw new Error(QSDM_ACTIVE_WALLET_CHANGED_MESSAGE);
+  }
+};
+
+// Recent transactions shows the send right away (Pending). Keeping this record never fails a send.
+const rememberWalletSend = (
+  sender: string,
+  submitted: QsdmSubmitSignedTransactionResponse | undefined,
+  { recipient, amount, fee }: { recipient: string; amount: number; fee: number }
+) => {
+  if (!submitted?.transaction_id) return;
+  try {
+    recordQsdmWalletSend(sender, {
+      txId: submitted.transaction_id,
+      to: recipient,
+      amount,
+      fee,
+      time: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.warn(
+      'Hive could not add the CELL send to Recent transactions.',
+      (error as Error)?.message
+    );
+  }
+};
 
 const readEnv = (key: string, fallback = '') => {
   const value = process.env[key];
@@ -110,6 +154,7 @@ const signQsdmWalletTransferWithCli = async (
   envelope: UnsignedQsdmWalletEnvelope
 ): Promise<QsdmSignedTransactionEnvelope> => {
   assertWalletSignerConfigured();
+  assertActiveWalletSender(envelope.sender);
 
   const args = ['wallet', 'sign-tx', '--envelope-file', '-'];
   const keystorePath = getQsdmTaskActionKeystorePath();
@@ -217,12 +262,20 @@ const submitQsdmWalletTransfer = async ({
   recipient,
   amount,
   fee = 0,
+  expectedSender,
 }: QsdmWalletTransferParams): Promise<QsdmSubmitSignedTransactionResponse> => {
   await assertQsdmCanonicalChainSafety({ forceRefresh: true });
   assertWalletSignerConfigured();
   const sender = getQsdmTaskActionSender();
   if (!sender) {
     throw new Error('QSDM signer address is not configured');
+  }
+  // The amount was checked against the balance of the wallet the screen showed.
+  if (
+    expectedSender !== undefined &&
+    !sameWalletAddress(expectedSender, sender)
+  ) {
+    throw new Error(QSDM_ACTIVE_WALLET_CHANGED_MESSAGE);
   }
 
   const signAndSubmit = async (nonce: number) => {
@@ -243,6 +296,9 @@ const submitQsdmWalletTransfer = async ({
     };
 
     const signedEnvelope = await signQsdmWalletTransferWithCli(envelope);
+    // An HTTP 429 answer is retried with this same signed envelope by the
+    // shared retry (qsdmHttpRetry): the API's rate limiter refuses before the
+    // handler runs, and the nonce makes a repeat a 409, never a second spend.
     // Recheck after signing and on every nonce retry, then retain that endpoint.
     const safety = await assertQsdmCanonicalChainSafety({ forceRefresh: true });
     const verifiedApiUrl = safety.effectiveApiUrl.replace(/\/+$/, '');
@@ -258,7 +314,9 @@ const submitQsdmWalletTransfer = async ({
   let nonce = await getNextWalletNonce(sender);
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
-      return await signAndSubmit(nonce);
+      const submitted = await signAndSubmit(nonce);
+      rememberWalletSend(sender, submitted, { recipient, amount, fee });
+      return submitted;
     } catch (error) {
       const conflict = getTransferConflict(error);
       const staleParents = isQsdmPoEParentsRejection(error);
@@ -284,5 +342,11 @@ const submitQsdmWalletTransfer = async ({
 
 export const submitQsdmWalletTransferIntent = (
   params: QsdmWalletTransferParams
-): Promise<QsdmSubmitSignedTransactionResponse> =>
-  enqueueWalletTransfer(() => submitQsdmWalletTransfer(params));
+): Promise<QsdmSubmitSignedTransactionResponse> => {
+  walletTransfersInProgress += 1;
+  return enqueueWalletTransfer(() => submitQsdmWalletTransfer(params)).finally(
+    () => {
+      walletTransfersInProgress -= 1;
+    }
+  );
+};

@@ -33,6 +33,7 @@ import {
   mergeQsdmSystemTasks,
   normalizeQsdmSystemTaskCoreCellAmount,
   resolveQsdmMinerValidatorBaseUrl,
+  setQsdmMinerRewardAddressToSigner,
   QSDM_EDGE_WORKER_MIN_STAKE_AMOUNT,
   QSDM_EDGE_WORKER_GPU_REWARD_PER_ROUND_CELL,
   QSDM_EDGE_WORKER_GPU_REWARD_POOL_TARGET_CELL,
@@ -532,6 +533,24 @@ describe('qsdmSystemTasks', () => {
         `--operator-passphrase-file=${sessionPassphraseFile}`,
       ]);
       expect(fs.readFileSync(configPath, 'utf8')).toBe(before);
+    });
+
+    it('rewrites a miner.toml with CR line endings with LF when aligning the reward address', () => {
+      const validator = resolveQsdmMinerValidatorBaseUrl();
+      const damaged = `protocol = "v2"\rreward_address = "${linkedSender}"\r\nvalidator_url = "${validator}"\r`;
+      fs.writeFileSync(configPath, damaged);
+
+      const result = setQsdmMinerRewardAddressToSigner();
+
+      expect(fs.readFileSync(configPath, 'utf8')).toBe(
+        `protocol = "v2"\nreward_address = "${linkedSender}"\nvalidator_url = "${validator}"\n`
+      );
+      expect(result.updated).toBe(true);
+      expect(fs.readFileSync(result.backupPath || '', 'utf8')).toBe(damaged);
+
+      const again = setQsdmMinerRewardAddressToSigner();
+      expect(again.updated).toBe(false);
+      expect(again.backupPath).toBeUndefined();
     });
 
     it('reports operator signing to the Miner panel without paths and caches it briefly', () => {

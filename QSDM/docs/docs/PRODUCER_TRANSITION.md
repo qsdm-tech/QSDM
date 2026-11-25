@@ -341,7 +341,13 @@ pin, the same earlier epochs from the same heights, new epochs only at the
 end), keeps the old `core.toml`, sets `authorized_block_producers` to the last
 producer, restarts the node, puts the old file back if the node does not start,
 and compares the node with the network. A new install with `--from-website`
-takes the schedule from the page. Because the installer refuses a changed
+takes the schedule from the page. A node starts only with a journal that
+reaches its schedule's last checkpoint, so when the node's chain is behind a
+checkpoint (a new node from an older snapshot, or a node catching up), the
+installer puts in only the epochs whose checkpoint the chain reaches, keeps the
+whole schedule, and a timer adds each next epoch when the node has reached its
+checkpoint ([Run a full node](RUN_A_FULL_NODE.md#when-the-block-maker-changes)).
+Because the installer refuses a changed
 prefix pin, the project keeps the existing pin in every published schedule
 (step 4 stays optional, and is not used for the public network).
 
