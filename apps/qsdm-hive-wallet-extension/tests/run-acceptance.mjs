@@ -136,6 +136,19 @@ let accountWallets = [];
 let accountTelegram = "";
 let accountSessionCount = 2;
 let accountDeleted = false;
+// The wallet-link challenge in the layout of the QSDM Account server
+// (pkg/account/service.go): it names its website, the account page's origin.
+// Wallet 0.6.1+ signs a QSDM Account message only for the website it names.
+const accountWalletLinkMessage = () =>
+  [
+    "QSDM Account wallet link",
+    "Version: 1",
+    "Account: acceptance-account",
+    `Address: ${TEST_ADDRESS}`,
+    "Challenge: acceptance-wallet-challenge",
+    "Expires: 2099-01-01T00:00:00Z",
+    `Origin: ${expectedOrigin}`,
+  ].join("\n");
 
 const readBody = (request) =>
   new Promise((resolve, reject) => {
@@ -192,7 +205,7 @@ const responseFor = (payload) => {
       assert.equal(typeof payload.params?.message, "string");
       assert.ok(
         payload.params.message === "QSDM acceptance challenge" ||
-          payload.params.message === "QSDM Account acceptance wallet challenge"
+          payload.params.message === accountWalletLinkMessage()
       );
       return {
         address: TEST_ADDRESS,
@@ -428,7 +441,7 @@ const server = http.createServer(async (request, response) => {
         ok: true,
         challenge: {
           id: "acceptance-wallet-challenge",
-          message: "QSDM Account acceptance wallet challenge",
+          message: accountWalletLinkMessage(),
           expires_at: new Date(Date.now() + 300000).toISOString(),
         },
       })
