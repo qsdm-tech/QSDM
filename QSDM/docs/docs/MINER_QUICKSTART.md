@@ -297,6 +297,26 @@ After the first successful run, write your settings to
 Or hand-edit the file. The schema is documented in the `Config`
 struct at the top of `cmd/qsdmminer-console/main.go`.
 
+### 4.5 Signed updates for the console miner
+
+The console miner checks for updates only when you enable `--auto-update`. Set
+`--update-public-key-file` to a trusted release public key you installed locally.
+The file must contain the hex-encoded ML-DSA-87 public key. Verify that key with
+the release owner independently of the update feed. Set `--update-url` if your
+operator uses a separate release host.
+
+The release host publishes the binary, `MANIFEST.json`, and
+`MANIFEST.json.sig` under the version directory before updating `latest.txt`.
+The signature file contains the hex-encoded ML-DSA-87 signature over the exact
+manifest bytes. The release owner can create it offline with
+`qsdmcli wallet sign --in <release-keystore> --message-file MANIFEST.json`.
+Publish newer `v`-prefixed semantic versions for updates.
+
+The miner verifies the signature before downloading and re-verifies the
+signature, artifact size and SHA-256 before installing. Manual
+`--apply-staged-update` uses the same key and checks. For an unsigned feed or
+a legacy staged file, use your release owner's verified installer to update.
+
 ## 5. Lifecycle commands
 
 The on-chain enrollment record is mutable state — you can read it,
