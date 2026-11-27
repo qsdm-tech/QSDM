@@ -3,7 +3,6 @@ import { randomBytes, timingSafeEqual } from 'crypto';
 import { BrowserWindow, dialog } from 'electron';
 import fs from 'fs';
 import http from 'http';
-import os from 'os';
 import path from 'path';
 
 import { getQsdmCellAccount } from 'main/controllers/qsdm/getQsdmCellAccount';
@@ -131,10 +130,14 @@ const normalizeOrigin = (value: string) => {
     parsed.protocol === 'http:' &&
     ['127.0.0.1', 'localhost', '::1'].includes(parsed.hostname);
   if (parsed.protocol !== 'https:' && !localHttp) {
-    throw new Error('QSDM wallet connections require HTTPS');
+    throw new WalletProviderRequestError(
+      'QSDM wallet connections require HTTPS'
+    );
   }
   if (parsed.origin !== value) {
-    throw new Error('QSDM wallet request origin must not contain a path');
+    throw new WalletProviderRequestError(
+      'QSDM wallet request origin must not contain a path'
+    );
   }
   return parsed.origin;
 };
@@ -149,7 +152,9 @@ const getPermission = (origin: string, address: string) =>
 const requireConnectedPermission = (origin: string) => {
   const address = getQsdmTaskActionSender();
   if (!address || !getPermission(origin, address)) {
-    throw new Error('This site is not connected to the active QSDM wallet');
+    throw new WalletProviderRequestError(
+      'This site is not connected to the active QSDM wallet'
+    );
   }
   return address;
 };
@@ -243,7 +248,9 @@ const confirmRequest = async ({
     ? await dialog.showMessageBox(window, options)
     : await dialog.showMessageBox(options);
   if (response.response !== 0) {
-    throw new Error('The QSDM wallet request was rejected');
+    throw new WalletProviderRequestError(
+      'The QSDM wallet request was rejected'
+    );
   }
 };
 
@@ -283,7 +290,7 @@ const getStringParam = (params: unknown, key: string, required = true) => {
       ? (params as Record<string, unknown>)[key]
       : undefined;
   if (typeof value !== 'string' || (required && !value.trim())) {
-    throw new Error(`${key} must be a non-empty string`);
+    throw new WalletProviderRequestError(`${key} must be a non-empty string`);
   }
   return value.trim();
 };
@@ -311,7 +318,9 @@ const sendCell = async ({
 }) => {
   const recipient = getStringParam(request.params, 'recipient');
   if (!SAFE_ADDRESS.test(recipient)) {
-    throw new Error('recipient is not a valid QSDM wallet address');
+    throw new WalletProviderRequestError(
+      'recipient is not a valid QSDM wallet address'
+    );
   }
   const rawAmount =
     request.params && typeof request.params === 'object'
@@ -323,7 +332,7 @@ const sendCell = async ({
     amount <= 0 ||
     !Number.isSafeInteger(amount * CELL_DECIMAL_FACTOR)
   ) {
-    throw new Error(
+    throw new WalletProviderRequestError(
       'amount must be greater than zero with no more than 8 decimal places'
     );
   }
@@ -349,13 +358,17 @@ export const handleWalletProviderRequest = async (
   options: WalletProviderBrokerOptions
 ) => {
   if (request.version !== BROKER_VERSION) {
-    throw new Error('Unsupported QSDM wallet provider version');
+    throw new WalletProviderRequestError(
+      'Unsupported QSDM wallet provider version'
+    );
   }
   if (
     request.id !== undefined &&
     (typeof request.id !== 'string' || request.id.length > 128)
   ) {
-    throw new Error('Invalid QSDM wallet provider request id');
+    throw new WalletProviderRequestError(
+      'Invalid QSDM wallet provider request id'
+    );
   }
   const origin = normalizeOrigin(request.origin || '');
   const method = request.method || '';
@@ -379,7 +392,9 @@ export const handleWalletProviderRequest = async (
   }
 
   if (!signer.ready || !signer.sender) {
-    throw new Error('QSDM Hive does not have an unlocked signer wallet');
+    throw new WalletProviderRequestError(
+      'QSDM Hive does not have an unlocked signer wallet'
+    );
   }
 
   if (origin === INTERNAL_EXTENSION_ORIGIN) {
@@ -394,7 +409,9 @@ export const handleWalletProviderRequest = async (
         options,
       });
     }
-    throw new Error('The extension popup cannot request wallet signatures');
+    throw new WalletProviderRequestError(
+      'The extension popup cannot request wallet signatures'
+    );
   }
 
   if (method === 'qsdm_requestAccounts') {
@@ -435,7 +452,9 @@ export const handleWalletProviderRequest = async (
   if (method === 'qsdm_signMessage') {
     const message = getStringParam(request.params, 'message');
     if (Buffer.byteLength(message, 'utf-8') > MAX_MESSAGE_BYTES) {
-      throw new Error('QSDM messages are limited to 16 KiB');
+      throw new WalletProviderRequestError(
+        'QSDM messages are limited to 16 KiB'
+      );
     }
     // Refused before any prompt: a message for another website.
     const kind = assertSignMessageOrigin(message, origin);
@@ -450,7 +469,7 @@ export const handleWalletProviderRequest = async (
     return sendCell({ request, origin, address, options });
   }
 
-  throw new Error(`Unsupported QSDM wallet method: ${method}`);
+  throw new WalletProviderRequestError('Unsupported QSDM wallet method');
 };
 
 const readRequestBody = (request: http.IncomingMessage) =>
@@ -477,48 +496,17 @@ const tokenMatches = (authorization: string | undefined, token: string) => {
   return left.length === right.length && timingSafeEqual(left, right);
 };
 
-const MAX_PUBLIC_ERROR_CHARS = 300;
-const PATH_TAIL = /[^\s"'<>|:,;()]*/;
-const WINDOWS_PATH = /\b[A-Za-z]:[\\/][^\s"'<>|:,;()]*/g;
-const UNC_PATH = /\\\\[^\s"'<>|:,;()]+/g;
-const POSIX_PATH =
-  /\/(?:Users|home|root|tmp|var|opt|private|Volumes|mnt|media|run|snap|Applications)\/[^\s"'<>|:,;()]*/g;
+class WalletProviderRequestError extends Error {
+  constructor(readonly publicText: string) {
+    super(publicText);
+  }
+}
 
-const escapeRegExp = (value: string) =>
-  value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-// Folders whose full names are private to this PC (the home folder carries
-// the user's account name), longest first.
-const getLocalFolders = () =>
-  [os.homedir(), os.tmpdir(), getAppDataPath(), process.resourcesPath]
-    .filter(
-      (folder): folder is string =>
-        typeof folder === 'string' && folder.length > 3
-    )
-    .sort((left, right) => right.length - left.length);
-
-/**
- * The error text a wallet request gets back. It goes to the browser extension
- * and from there to the web page that made the request, so local paths (the
- * qsdmcli location, a file qsdmcli names) are replaced with "<path>" and the
- * text is cut at 300 characters. The full error is logged in Hive.
- */
-export const publicErrorText = (error: unknown): string => {
-  let text = error instanceof Error ? error.message : String(error);
-  getLocalFolders().forEach((folder) => {
-    text = text.replace(
-      new RegExp(`${escapeRegExp(folder)}${PATH_TAIL.source}`, 'gi'),
-      '<path>'
-    );
-  });
-  text = text
-    .replace(WINDOWS_PATH, '<path>')
-    .replace(UNC_PATH, '<path>')
-    .replace(POSIX_PATH, '<path>');
-  return text.length > MAX_PUBLIC_ERROR_CHARS
-    ? `${text.slice(0, MAX_PUBLIC_ERROR_CHARS)}...`
-    : text;
-};
+// Only broker-authored request messages cross into the browser.
+export const publicErrorText = (error: unknown): string =>
+  error instanceof WalletProviderRequestError
+    ? error.publicText
+    : 'QSDM wallet request failed';
 
 const sendJson = (
   response: http.ServerResponse,

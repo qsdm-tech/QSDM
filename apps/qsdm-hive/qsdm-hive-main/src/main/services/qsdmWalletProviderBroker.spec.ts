@@ -334,7 +334,6 @@ describe('qsdmWalletProviderBroker', () => {
   });
 
   it('answers a failed request without local paths', async () => {
-    const homedir = jest.spyOn(os, 'homedir').mockReturnValue('/home/jane');
     const warn = jest
       .spyOn(console, 'warn')
       .mockImplementation(() => undefined);
@@ -383,62 +382,24 @@ describe('qsdmWalletProviderBroker', () => {
       expect(reply.status).toBe(400);
       expect(JSON.parse(reply.body)).toEqual({
         ok: false,
-        error: 'spawn <path> ENOENT',
+        error: 'QSDM wallet request failed',
       });
       expect(reply.body).not.toContain('jane');
       expect(warn).toHaveBeenCalled();
     } finally {
       stopQsdmWalletProviderBroker();
-      homedir.mockRestore();
       warn.mockRestore();
     }
   });
 });
 
 describe('publicErrorText', () => {
-  afterEach(() => {
-    jest.restoreAllMocks();
-  });
-
-  it('replaces paths in the home folder, spaces included', () => {
-    jest.spyOn(os, 'homedir').mockReturnValue('C:\\Users\\Jane Doe');
-
-    expect(
-      publicErrorText(
-        new Error(
-          'spawn C:\\Users\\Jane Doe\\AppData\\Local\\Programs\\QSDM\\qsdmcli.exe ENOENT'
-        )
-      )
-    ).toBe('spawn <path> ENOENT');
-  });
-
-  it('replaces other absolute paths and keeps the message', () => {
-    jest.spyOn(os, 'homedir').mockReturnValue('/home/jane');
-
-    expect(
-      publicErrorText(
-        new Error(
-          'open /home/jane/.config/QSDM-Hive/keys.json: permission denied'
-        )
-      )
-    ).toBe('open <path>: permission denied');
-    expect(
-      publicErrorText('spawn /opt/QSDM/resources/bin/qsdmcli ENOENT')
-    ).toBe('spawn <path> ENOENT');
-    expect(publicErrorText('D:\\Tools\\qsdmcli.exe exited with code 1')).toBe(
-      '<path> exited with code 1'
+  it('uses a generic message for unexpected errors and thrown values', () => {
+    expect(publicErrorText(new Error('Internal wallet tool diagnostic'))).toBe(
+      'QSDM wallet request failed'
     );
-    expect(publicErrorText('cannot read \\\\nas\\share\\wallet')).toBe(
-      'cannot read <path>'
+    expect(publicErrorText('Internal wallet tool failure')).toBe(
+      'QSDM wallet request failed'
     );
-    expect(
-      publicErrorText('POST https://api.qsdm.tech/api/v1/wallet failed')
-    ).toBe('POST https://api.qsdm.tech/api/v1/wallet failed');
-  });
-
-  it('cuts long text at 300 characters', () => {
-    const text = publicErrorText(new Error('x'.repeat(1000)));
-
-    expect(text).toBe(`${'x'.repeat(300)}...`);
   });
 });
