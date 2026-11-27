@@ -303,7 +303,9 @@ The console miner checks for updates only when you enable `--auto-update`. Set
 `--update-public-key-file` to a trusted release public key you installed locally.
 The file must contain the hex-encoded ML-DSA-87 public key. Verify that key with
 the release owner independently of the update feed. Set `--update-url` if your
-operator uses a separate release host.
+operator uses a separate release host. The default signed feed is
+`https://qsdm.tech/releases/console-v1`. Install and verify the first signed
+release manually before enabling automatic updates.
 
 The release host publishes the binary, `MANIFEST.json`, and
 `MANIFEST.json.sig` under the version directory before updating `latest.txt`.
