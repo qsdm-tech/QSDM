@@ -12,7 +12,7 @@ import (
 	"github.com/blackbeardONE/QSDM/pkg/monitoring"
 )
 
-func TestIsLocalRedirect(t *testing.T) {
+func TestParseLocalRedirect(t *testing.T) {
 	for s, want := range map[string]bool{
 		"/":                    true,
 		"/ok?a=1":              true,
@@ -29,8 +29,8 @@ func TestIsLocalRedirect(t *testing.T) {
 		"javascript:alert(1)":  false,
 		"evil.example/path":    false,
 	} {
-		if got := isLocalRedirect(s); got != want {
-			t.Errorf("isLocalRedirect(%q) = %v, want %v", s, got, want)
+		if got := parseLocalRedirect(s) != nil; got != want {
+			t.Errorf("parseLocalRedirect(%q) accepted = %v, want %v", s, got, want)
 		}
 	}
 }
@@ -64,6 +64,7 @@ func TestDashboardLoginRedirectStaysOnDashboard(t *testing.T) {
 	for redirect, want := range map[string]string{
 		"":                      "/",
 		"/settings?tab=keys":    "/settings?tab=keys",
+		"/settings%20page?tab=keys#public": "/settings%20page?tab=keys#public",
 		"https://evil.example/": "/",
 		"//evil.example/":       "/",
 		"/\\evil.example/":      "/",
