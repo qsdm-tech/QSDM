@@ -14,10 +14,89 @@ param(
     [string]$Commit = "",
     [string]$WalletExtensionVersion = "",
     [ValidateRange(1, 120)]
-    [int]$ValidDays = 90
+    [int]$ValidDays = 90,
+
+    # Optional signed policy fields. Empty: the field is not written and the
+    # manifest is exactly as before. Older Hives ignore both fields.
+    #   -MinSupportedVersion (Hive 1.4.26+): the oldest Hive that keeps mining
+    #     and sending once this release is live. A normal release passes the
+    #     previous version; a security release passes -Version itself.
+    #   -RolloutPercent (Hive 1.4.28+): 0..100. A Hive offers the update on its
+    #     own only when its local bucket (from a random install ID that never
+    #     leaves the PC) is below this number. A Hive below MinSupportedVersion
+    #     updates whatever this says. Below 100 it needs a MinSupportedVersion
+    #     below -Version, or every Hive outside the rollout would be blocked.
+    [string]$MinSupportedVersion = "",
+    [string]$RolloutPercent = ""
 )
 
 $ErrorActionPreference = 'Stop'
+
+# The policy checks and the manifest layout are functions so that
+# test_new_hive_release_manifest.ps1 can load them from this file and test them
+# without a key.
+function Assert-HiveReleasePolicy {
+    param(
+        [string]$Version,
+        [string]$MinSupportedVersion,
+        [string]$RolloutPercent
+    )
+    if ($Version -notmatch '^\d+\.\d+\.\d+$') {
+        throw 'Version must use MAJOR.MINOR.PATCH format.'
+    }
+    if ($MinSupportedVersion) {
+        if ($MinSupportedVersion -notmatch '^\d+\.\d+\.\d+$') {
+            throw 'MinSupportedVersion must use MAJOR.MINOR.PATCH format.'
+        }
+        if ([version]$MinSupportedVersion -gt [version]$Version) {
+            throw 'MinSupportedVersion must not be above Version.'
+        }
+    }
+    if ($RolloutPercent -ne '') {
+        if ($RolloutPercent -notmatch '^(0|[1-9][0-9]?|100)$') {
+            throw 'RolloutPercent must be a whole number from 0 to 100.'
+        }
+        if ([int]$RolloutPercent -lt 100 -and
+            (-not $MinSupportedVersion -or [version]$MinSupportedVersion -ge [version]$Version)) {
+            throw 'RolloutPercent below 100 needs a MinSupportedVersion below Version; otherwise every Hive outside the rollout is blocked.'
+        }
+    }
+}
+
+# The manifest fields in their signed order. The two policy fields follow
+# version, and only when given.
+function New-HiveReleaseManifest {
+    param(
+        [string]$Platform,
+        [string]$Version,
+        [string]$MinSupportedVersion,
+        [string]$RolloutPercent,
+        [string]$Commit,
+        [DateTime]$IssuedAt,
+        [int]$ValidDays,
+        [string]$KeyId,
+        [object[]]$Artifacts
+    )
+    $manifest = [ordered]@{
+        schema = 'qsdm.release-manifest.v1'
+        product = 'qsdm-hive'
+        channel = 'stable'
+        platform = $Platform
+        version = $Version
+    }
+    if ($MinSupportedVersion) {
+        $manifest.min_supported_version = $MinSupportedVersion
+    }
+    if ($RolloutPercent -ne '') {
+        $manifest.rollout_percent = [int]$RolloutPercent
+    }
+    $manifest.commit = $Commit.ToLowerInvariant()
+    $manifest.issued_at = $IssuedAt.ToString('o')
+    $manifest.expires_at = $IssuedAt.AddDays($ValidDays).ToString('o')
+    $manifest.key_id = $KeyId.ToLowerInvariant()
+    $manifest.artifacts = $Artifacts
+    return $manifest
+}
 
 # Keep this vocabulary compatible with already-released Hive clients. New
 # artifact kinds must use one of these generic authenticated roles until a
@@ -36,9 +115,7 @@ if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
     throw 'Release signing currently requires the Windows user who owns the DPAPI-protected key.'
 }
 
-if ($Version -notmatch '^\d+\.\d+\.\d+$') {
-    throw 'Version must use MAJOR.MINOR.PATCH format.'
-}
+Assert-HiveReleasePolicy -Version $Version -MinSupportedVersion $MinSupportedVersion -RolloutPercent $RolloutPercent
 
 $workspace = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
 if (-not $WalletExtensionVersion) {
@@ -193,18 +270,10 @@ foreach ($spec in $specs) {
 $artifacts = @($artifacts | Sort-Object { $_.name })
 
 $issuedAt = (Get-Date).ToUniversalTime()
-$manifest = [ordered]@{
-    schema = 'qsdm.release-manifest.v1'
-    product = 'qsdm-hive'
-    channel = 'stable'
-    platform = $Platform
-    version = $Version
-    commit = $Commit.ToLowerInvariant()
-    issued_at = $issuedAt.ToString('o')
-    expires_at = $issuedAt.AddDays($ValidDays).ToString('o')
-    key_id = ([string]$publicMetadata.key_id).ToLowerInvariant()
-    artifacts = $artifacts
-}
+$manifest = New-HiveReleaseManifest -Platform $Platform -Version $Version `
+    -MinSupportedVersion $MinSupportedVersion -RolloutPercent $RolloutPercent `
+    -Commit $Commit -IssuedAt $issuedAt -ValidDays $ValidDays `
+    -KeyId ([string]$publicMetadata.key_id) -Artifacts $artifacts
 
 $manifestPath = Join-Path $DownloadsDirectory $manifestName
 $payloadPath = Join-Path $SigningDirectory ('.manifest-' + [Guid]::NewGuid().ToString('N') + '.tmp')

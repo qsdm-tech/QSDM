@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
 )
 
 // fakeRelease packages a tiny in-memory release server: latest.txt
@@ -20,12 +22,15 @@ import (
 // memory. Tests construct one per case; the server URL is the
 // updater's BaseURL.
 type fakeRelease struct {
-	tag         string
-	component   string
-	goos        string
-	goarch      string
-	artifactBin []byte
-	overrideSHA string // when non-empty, lie in MANIFEST.json
+	tag          string
+	component    string
+	goos         string
+	goarch       string
+	artifactBin  []byte
+	overrideSHA  string // when non-empty, use a mismatching artifact hash
+	unsigned     bool
+	badSignature bool
+	bom          bool
 }
 
 func newFakeRelease(t *testing.T, tag, component, goos, goarch string, body []byte) *httptest.Server {
@@ -41,41 +46,76 @@ func newFakeRelease(t *testing.T, tag, component, goos, goarch string, body []by
 }
 
 func (f *fakeRelease) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	switch {
-	case r.URL.Path == "/"+DefaultLatestPath:
+	base := "/" + f.tag + "/"
+	switch r.URL.Path {
+	case "/" + DefaultLatestPath:
 		fmt.Fprintln(w, f.tag)
-	case strings.HasSuffix(r.URL.Path, "/"+ManifestFileName) &&
-		strings.HasPrefix(r.URL.Path, "/"+f.tag+"/"):
-		sha := sha256.Sum256(f.artifactBin)
-		shaHex := hex.EncodeToString(sha[:])
-		if f.overrideSHA != "" {
-			shaHex = f.overrideSHA
-		}
+	case base + ManifestFileName:
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{
-		  "version": %q,
-		  "components": [
-		    {
-		      "component": %q, "os": %q, "arch": %q,
-		      "file": "qsdmminer-%s-%s",
-		      "sizeBytes": %d, "sha256": %q
-		    }
-		  ]
-		}`, f.tag, f.component, f.goos, f.goarch, f.goos, f.goarch, len(f.artifactBin), shaHex)
-	case strings.HasPrefix(r.URL.Path, "/"+f.tag+"/qsdmminer-"+f.goos+"-"+f.goarch):
+		w.Write(f.manifest())
+	case base + ManifestFileName + ".sig":
+		if f.unsigned {
+			http.NotFound(w, r)
+			return
+		}
+		sig := make([]byte, mldsa87.SignatureSize)
+		if err := mldsa87.SignTo(fakeReleasePrivateKey, f.manifest(), nil, false, sig); err != nil {
+			panic(err)
+		}
+		if f.badSignature {
+			sig[0] ^= 1
+		}
+		fmt.Fprintln(w, hex.EncodeToString(sig))
+	case base + "qsdmminer-" + f.goos + "-" + f.goarch:
 		w.Write(f.artifactBin)
 	default:
 		http.NotFound(w, r)
 	}
 }
 
+func (f *fakeRelease) manifest() []byte {
+	sha := sha256.Sum256(f.artifactBin)
+	shaHex := hex.EncodeToString(sha[:])
+	if f.overrideSHA != "" {
+		shaHex = f.overrideSHA
+	}
+	body := fmt.Sprintf(`{
+	  "version": %q,
+	  "components": [
+	    {
+	      "component": %q, "os": %q, "arch": %q,
+	      "file": "qsdmminer-%s-%s",
+	      "sizeBytes": %d, "sha256": %q
+	    }
+	  ]
+	}`, f.tag, f.component, f.goos, f.goarch, f.goos, f.goarch, len(f.artifactBin), shaHex)
+	if f.bom {
+		body = string(utf8BOM) + body
+	}
+	return []byte(body)
+}
+
+var fakeReleasePublicKey, fakeReleasePrivateKey = mldsa87.NewKeyFromSeed(&[mldsa87.SeedSize]byte{1})
+
 func mustNew(t *testing.T, cfg Config) *Updater {
 	t.Helper()
+	cfg.TrustedKeyFile = filepath.Join(t.TempDir(), "miner-release.pub")
+	if err := os.WriteFile(cfg.TrustedKeyFile, []byte(hex.EncodeToString(fakeReleasePublicKey.Bytes())), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	u, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	return u
+}
+
+func missingStageUpdater(t *testing.T) *Updater {
+	t.Helper()
+	return mustNew(t, Config{
+		BaseURL: "https://unused.invalid", Component: "qsdmminer", GOOS: "linux", GOARCH: "amd64",
+		CurrentVersion: "v1.0.0",
+	})
 }
 
 func TestNew_RejectsZeroValueConfig(t *testing.T) {
@@ -88,6 +128,7 @@ func TestNew_RejectsZeroValueConfig(t *testing.T) {
 		{"missing GOOS", Config{BaseURL: "x", Component: "c", GOARCH: "amd64", CurrentVersion: "v1"}},
 		{"missing GOARCH", Config{BaseURL: "x", Component: "c", GOOS: "linux", CurrentVersion: "v1"}},
 		{"missing CurrentVersion", Config{BaseURL: "x", Component: "c", GOOS: "linux", GOARCH: "amd64"}},
+		{"missing trusted key", Config{BaseURL: "x", Component: "c", GOOS: "linux", GOARCH: "amd64", CurrentVersion: "v1.0.0"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -172,31 +213,15 @@ func TestCheckAndStage_StagesNewVersion(t *testing.T) {
 
 func TestCheckAndStage_SHA256Mismatch(t *testing.T) {
 	body := []byte("the-fake-binary-payload-bytes")
-	srv := newFakeRelease(t, "v0.3.0+xxx", "qsdmminer", "linux", "amd64", body)
+	srv := httptest.NewServer(&fakeRelease{
+		tag: "v0.3.0+xxx", component: "qsdmminer", goos: "linux", goarch: "amd64",
+		artifactBin: body, overrideSHA: strings.Repeat("0", 64),
+	})
 	defer srv.Close()
-	// Surgery: poke the registered handler so MANIFEST.json
-	// reports a deliberately wrong sha. We do this by replacing
-	// the server's handler with one that wraps the original.
-	tampered := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/"+ManifestFileName) {
-			fmt.Fprintf(w, `{
-			  "version": "v0.3.0+xxx",
-			  "components": [
-			    {"component":"qsdmminer","os":"linux","arch":"amd64",
-			     "file":"qsdmminer-linux-amd64","sizeBytes":%d,
-			     "sha256":"deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"}
-			  ]
-			}`, len(body))
-			return
-		}
-		// Forward to the real fake for latest.txt + artifact.
-		http.Redirect(w, r, srv.URL+r.URL.Path, http.StatusTemporaryRedirect)
-	}))
-	defer tampered.Close()
 
 	stage := filepath.Join(t.TempDir(), "miner.next")
 	u := mustNew(t, Config{
-		BaseURL: tampered.URL, Component: "qsdmminer",
+		BaseURL: srv.URL, Component: "qsdmminer",
 		GOOS: "linux", GOARCH: "amd64", CurrentVersion: "v0.0.1",
 		StagePath: stage,
 	})
@@ -255,27 +280,10 @@ func TestLooksLikeTag(t *testing.T) {
 func TestCheckAndStage_ManifestWithBOM(t *testing.T) {
 	body := []byte("payload-bytes-go-here-test-the-bom-tolerance-path")
 	stage := filepath.Join(t.TempDir(), "miner.next")
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/"+DefaultLatestPath:
-			fmt.Fprintln(w, "v0.5.0+bom")
-		case strings.HasSuffix(r.URL.Path, "/"+ManifestFileName):
-			sha := sha256.Sum256(body)
-			shaHex := hex.EncodeToString(sha[:])
-			w.Write([]byte{0xEF, 0xBB, 0xBF})
-			fmt.Fprintf(w, `{
-			  "version":"v0.5.0+bom",
-			  "components":[
-			    {"component":"qsdmminer","os":"linux","arch":"amd64",
-			     "file":"qsdmminer-linux-amd64","sizeBytes":%d,"sha256":%q}
-			  ]
-			}`, len(body), shaHex)
-		case strings.HasPrefix(r.URL.Path, "/v0.5.0+bom/qsdmminer-linux-amd64"):
-			w.Write(body)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
+	srv := httptest.NewServer(&fakeRelease{
+		tag: "v0.5.0+bom", component: "qsdmminer", goos: "linux", goarch: "amd64",
+		artifactBin: body, bom: true,
+	})
 	defer srv.Close()
 	u := mustNew(t, Config{
 		BaseURL: srv.URL, Component: "qsdmminer",
@@ -295,7 +303,7 @@ func TestApplyStaged_NoStaged(t *testing.T) {
 	dir := t.TempDir()
 	exePath := filepath.Join(dir, "miner")
 	stagePath := filepath.Join(dir, "miner.next")
-	if err := ApplyStaged(stagePath, exePath, []string{exePath}); !errors.Is(err, ErrNoStagedUpdate) {
+	if err := missingStageUpdater(t).ApplyStaged(stagePath, exePath, []string{exePath}); !errors.Is(err, ErrNoStagedUpdate) {
 		t.Fatalf("want ErrNoStagedUpdate, got %v", err)
 	}
 }
@@ -303,12 +311,110 @@ func TestApplyStaged_NoStaged(t *testing.T) {
 func TestApplyStagedIfPresent_NoStaged(t *testing.T) {
 	dir := t.TempDir()
 	exePath := filepath.Join(dir, "miner")
-	applied, err := ApplyStagedIfPresent(exePath, []string{exePath})
+	applied, err := missingStageUpdater(t).ApplyStagedIfPresent(exePath, []string{exePath})
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
 	if applied {
 		t.Fatal("applied=true with no staged file present")
+	}
+}
+
+func TestCheckAndStageRequiresSignedManifest(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		unsigned bool
+		badSig   bool
+	}{
+		{"missing signature", true, false},
+		{"invalid signature", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(&fakeRelease{
+				tag: "v1.1.0", component: "qsdmminer", goos: "linux", goarch: "amd64",
+				artifactBin: []byte("test artifact"), unsigned: tc.unsigned, badSignature: tc.badSig,
+			})
+			defer srv.Close()
+			stage := filepath.Join(t.TempDir(), "miner.next")
+			u := mustNew(t, Config{
+				BaseURL: srv.URL, Component: "qsdmminer", GOOS: "linux", GOARCH: "amd64",
+				CurrentVersion: "v1.0.0", StagePath: stage,
+			})
+			if _, err := u.CheckAndStage(context.Background()); err == nil {
+				t.Fatal("unverified manifest produced an update")
+			}
+			if _, err := os.Stat(stage); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("unverified release wrote an artifact: %v", err)
+			}
+		})
+	}
+}
+
+func TestApplyReverifiesSignedStaging(t *testing.T) {
+	body := []byte("test artifact")
+	srv := newFakeRelease(t, "v1.1.0", "qsdmminer", "linux", "amd64", body)
+	defer srv.Close()
+	executable := filepath.Join(t.TempDir(), "miner")
+	stage := executable + ".next"
+	u := mustNew(t, Config{
+		BaseURL: srv.URL, Component: "qsdmminer", GOOS: "linux", GOARCH: "amd64",
+		CurrentVersion: "v1.0.0", StagePath: stage,
+	})
+	if _, err := u.CheckAndStage(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	verified, err := u.prepareVerifiedArtifact(stage, executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(verified)
+	if err != nil || !bytesEq(got, body) {
+		t.Fatalf("verified copy: %q, %v", got, err)
+	}
+	if err := os.WriteFile(stage, []byte("Test artifact"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := u.ApplyStaged(stage, executable, nil); !errors.Is(err, ErrSHA256Mismatch) {
+		t.Fatalf("changed binary got %v, want ErrSHA256Mismatch", err)
+	}
+	if err := os.Remove(stage + ".auth"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := u.prepareVerifiedArtifact(stage, executable); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing staged authorization got %v", err)
+	}
+
+	if _, err := u.CheckAndStage(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	u.cfg.CurrentVersion = "v1.2.0"
+	if _, err := u.prepareVerifiedArtifact(stage, executable); !errors.Is(err, ErrReleaseNotNewer) {
+		t.Fatalf("signed older version got %v, want ErrReleaseNotNewer", err)
+	}
+}
+
+func TestApplyRestoresOriginalIfReplacementCannotStart(t *testing.T) {
+	srv := newFakeRelease(t, "v1.1.0", "qsdmminer", "linux", "amd64", []byte("not an executable"))
+	defer srv.Close()
+	executable := filepath.Join(t.TempDir(), "miner.exe")
+	original := []byte("current miner")
+	if err := os.WriteFile(executable, original, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stage := executable + ".next"
+	u := mustNew(t, Config{
+		BaseURL: srv.URL, Component: "qsdmminer", GOOS: "linux", GOARCH: "amd64",
+		CurrentVersion: "v1.0.0", StagePath: stage,
+	})
+	if _, err := u.CheckAndStage(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := u.ApplyStaged(stage, executable, nil); err == nil || !strings.Contains(err.Error(), "start new binary") {
+		t.Fatalf("expected a start failure, got %v", err)
+	}
+	got, err := os.ReadFile(executable)
+	if err != nil || !bytesEq(got, original) {
+		t.Fatalf("restored executable: %q, %v", got, err)
 	}
 }
 

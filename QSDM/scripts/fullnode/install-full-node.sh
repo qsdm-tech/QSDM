@@ -36,6 +36,14 @@ OPT_DIR=/opt/qsdm-follower
 ETC_DIR=/etc/qsdm-follower
 SNAP_PARENT=/srv/qsdm-snapshot
 UNIT_FILE=/etc/systemd/system/qsdm-follower.service
+# A node whose chain is behind a block maker's hand-over block takes the schedule one block maker at a time
+# (RUN_A_FULL_NODE.md, "When the block maker changes"): the full schedule is kept in SAVED_SCHEDULE, and a
+# timer runs a copy of this installer with --continue-schedule until every block maker is in core.toml.
+SAVED_SCHEDULE=/etc/qsdm-follower/producer-schedule.toml
+INSTALLER_COPY=/opt/qsdm-follower/install-full-node.sh
+STEP_UNIT=qsdm-follower-schedule
+STEP_SERVICE_FILE=/etc/systemd/system/qsdm-follower-schedule.service
+STEP_TIMER_FILE=/etc/systemd/system/qsdm-follower-schedule.timer
 IMPORT_RECORD=qsdm_snapshot_import.json
 # The files `qsdm --snapshot-import` refuses to find in the state directory (it fills an empty one).
 CHAIN_FILES=(qsdm_chain.ndjson qsdm_accounts.json qsdm_enrollment.json qsdm_staking.json
@@ -66,16 +74,19 @@ NEED_DISK_KB=$((15 * 1000 * 1000))
 RELEASE='' RELEASE_TAG='' QSDM_SHA='' KEY_ID='' CP_HEIGHT='' CP_HASH='' CP_ROOT='' CP_PRODUCER=''
 FROM_WEBSITE=0 WEBSITE_URL=$DEFAULT_WEBSITE API_BASE=$DEFAULT_API DOWNLOAD_BASE='' QSDMCLI=''
 REQUIRE_SIGNATURE=0 WORK_DIR='' ROOT='' DRY_RUN=0 WAIT_MINUTES=30 SKIP_RESOURCE_CHECK=0
-SCHEDULE_FLAG='' UPDATE_SCHEDULE=0
+SCHEDULE_FLAG='' UPDATE_SCHEDULE=0 CONTINUE_SCHEDULE=0
 
 # State.
 IS_ROOT=0 INSTALL_STARTED=0 IMPORT_DONE=0 LOCKED=0 RUN_TMP='' UNPACK_TMP='' HELPER=''
 # The block-maker schedule: the file in use (from the page or --producer-schedule), where it came from,
 # the core.toml to install (the release's, or the release's with that schedule) and what the step totals are.
 SCHEDULE='' SCHEDULE_FROM='' PAGE_SCHEDULE='' TARGET_CONFIG='' TARGET_WHAT='' FIRST_NEW=0
+# The block makers of the schedule that wait until the node's chain reaches NEXT_CHECKPOINT.
+PENDING=0 NEXT_CHECKPOINT=0
 STEP_TOTAL=8 CHECK_STEP=8 CHECK_LOCAL_TIP=0 CHECK_PUBLIC_TIP=0
 BUNDLE='' BUNDLE_TGZ='' SNAP_NAME='' SNAP_ARCHIVE='' ARCHIVE_SHA='' LOCAL_API='' DL='' STATE=''
 P_STATE='' P_OPT='' P_ETC='' P_SNAP_PARENT='' P_SNAP_DIR='' P_UNIT='' UNPACK_PROBLEM=''
+P_SAVED='' P_COPY='' P_STEP_SERVICE='' P_STEP_TIMER=''
 R_AUTHORIZED='' R_STATE_DIR='' R_HEIGHT='' R_HASH='' R_ROOT='' R_PRODUCER='' R_SIGNED='' R_INSTALLED=''
 PROTO=()
 CURL_BIG=(--fail --location --retry 5 --retry-delay 10 --connect-timeout 30 --speed-limit 10240 --speed-time 120)
@@ -116,6 +127,16 @@ When the block maker changes (RUN_A_FULL_NODE.md, "When the block maker changes"
                                keep the old file next to it, restart the node and check it against
                                the network. The new schedule must continue the node's: the same
                                earlier block makers from the same blocks. Nothing else changes.
+                               A node starts only with a chain that reaches the last hand-over
+                               block of its schedule. When the node's chain is behind it (a new
+                               install from an older snapshot, or a node that is catching up), it
+                               gets the block makers its chain reaches now; the rest of the
+                               schedule is kept in $SAVED_SCHEDULE, and the
+                               timer $STEP_UNIT.timer adds each next block maker when the
+                               node reaches its hand-over block (a restart each).
+  --continue-schedule          used by that timer: add the next block maker of the saved schedule
+                               if the node has reached its hand-over block; when all are in,
+                               remove the timer. Changes nothing otherwise.
 
 Options:
   --qsdmcli PATH               qsdmcli for the release signature check (default: qsdmcli on PATH).
@@ -240,6 +261,7 @@ parse_args() {
       --from-website) FROM_WEBSITE=1; shift ;;
       --producer-schedule) need_arg "$@"; SCHEDULE_FLAG=$2; shift 2 ;;
       --update-schedule) UPDATE_SCHEDULE=1; shift ;;
+      --continue-schedule) CONTINUE_SCHEDULE=1 UPDATE_SCHEDULE=1; shift ;;
       --website-url) need_arg "$@"; WEBSITE_URL=$2; shift 2 ;;
       --api) need_arg "$@"; API_BASE=$2; shift 2 ;;
       --download-base) need_arg "$@"; DOWNLOAD_BASE=$2; shift 2 ;;
@@ -322,7 +344,10 @@ validate_args() {
   if [[ -n $SCHEDULE_FLAG && ! ( -f $SCHEDULE_FLAG && -r $SCHEDULE_FLAG ) ]]; then
     usage_error "--producer-schedule is not a file this user can read: $SCHEDULE_FLAG"
   fi
-  if [[ $UPDATE_SCHEDULE == 1 && $FROM_WEBSITE == 0 && -z $SCHEDULE_FLAG ]]; then
+  if [[ $CONTINUE_SCHEDULE == 1 && ( $FROM_WEBSITE == 1 || -n $SCHEDULE_FLAG ) ]]; then
+    usage_error "--continue-schedule takes the schedule this installer saved in $SAVED_SCHEDULE; it does not read --from-website or --producer-schedule"
+  fi
+  if [[ $UPDATE_SCHEDULE == 1 && $CONTINUE_SCHEDULE == 0 && $FROM_WEBSITE == 0 && -z $SCHEDULE_FLAG ]]; then
     usage_error "--update-schedule needs the new schedule: --from-website (reads it from $DEFAULT_WEBSITE) or --producer-schedule FILE"
   fi
   if [[ -n $QSDMCLI ]]; then
@@ -365,6 +390,10 @@ derive_names() {
   P_SNAP_PARENT=$ROOT$SNAP_PARENT
   P_SNAP_DIR=$P_SNAP_PARENT/$SNAP_NAME
   P_UNIT=$ROOT$UNIT_FILE
+  P_SAVED=$ROOT$SAVED_SCHEDULE
+  P_COPY=$ROOT$INSTALLER_COPY
+  P_STEP_SERVICE=$ROOT$STEP_SERVICE_FILE
+  P_STEP_TIMER=$ROOT$STEP_TIMER_FILE
 }
 
 # ---------------------------------------------------------------------------------------------------
@@ -1022,14 +1051,36 @@ def cmd_schedule_same(first, second):
         raise Bad("the two producer schedules differ")
 
 
-def cmd_schedule_apply(config, schedule, out):
+def schedule_prefix_lines(lines, count):
+    """The text of a schedule's first COUNT epochs: LINES up to the header of epoch COUNT (0-based), without
+    the blank or comment lines before that header."""
+    seen = 0
+    for i, raw in enumerate(lines):
+        if raw.split("#", 1)[0].strip() == "[[" + EPOCHS + "]]":
+            if seen == count:
+                end = i
+                while end > 0 and (not lines[end - 1].strip() or lines[end - 1].strip().startswith("#")):
+                    end -= 1
+                return lines[:end]
+            seen += 1
+    return lines
+
+
+def cmd_schedule_apply(config, schedule, out, tip=""):
     """CONFIG (a core.toml) with its producer schedule replaced by SCHEDULE, written to OUT.
 
     SCHEDULE must continue CONFIG's schedule: the same journal prefix pin and the same earlier block makers,
     each from the same height, with new block makers only added at the end. authorized_block_producers is set
     to the last block maker (PRIVATE_P2P.md section 4). Nothing else in the file changes. Prints
     "status=current" (OUT not written: CONFIG already enforces SCHEDULE) or "status=added N", then
-    "first_new=H" (the first block of the first added block maker; 0 when current), the epochs and the digest."""
+    "first_new=H" (the first block of the first added block maker; 0 when current), "pending=N" and
+    "next_checkpoint=H", the epochs and the digest.
+
+    With TIP (the last block the node's chain holds), only the block makers whose hand-over checkpoint is
+    at or below TIP are added: a node starts only with a chain that reaches the last checkpoint of its
+    schedule (PRODUCER_TRANSITION.md), so a node that is behind takes the schedule one block maker at a
+    time. "pending=N" counts the block makers left for later, and "next_checkpoint=H" is the block the
+    node must hold before the next one can be added (0 when none is left)."""
     text = read_text(config, 1024 * 1024)
     lines = text.split("\n")
     span = schedule_span(lines)
@@ -1047,6 +1098,21 @@ def cmd_schedule_apply(config, schedule, out):
     if len(new["epochs"]) < n or new["epochs"][:n] != old["epochs"]:
         raise Bad("the new schedule does not continue this node's: an earlier block maker, its first block or "
                   "its checkpoint hash is different, or one is missing")
+    pending, next_checkpoint = 0, 0
+    if tip != "":
+        if not HEIGHT.fullmatch(tip):
+            raise Bad(f"internal error: the node's last block is not a whole number: {tip!r}")
+        keep = len(new["epochs"])
+        while keep > n and new["epochs"][keep - 1]["from_height"] - 1 > int(tip):
+            keep -= 1
+        pending = len(new["epochs"]) - keep
+        if pending:
+            next_checkpoint = new["epochs"][keep]["from_height"] - 1
+            new_lines = schedule_prefix_lines(new_lines, keep)
+            cut = schedule_from_lines(new_lines, "the first part of the new schedule")
+            if cut["epochs"] != new["epochs"][:keep]:
+                raise Bad("internal error: the first part of the new schedule is not its first block makers")
+            full, new = new, cut
     height, producer = snapshot_pins(lines)
     if type(height) is int and isinstance(producer, str) and producer_at(new, height) != producer:
         raise Bad(f"the new schedule names another block maker for the snapshot checkpoint (block {height}) "
@@ -1055,7 +1121,9 @@ def cmd_schedule_apply(config, schedule, out):
     if added == 0:
         print("status=current")
         print("first_new=0")
-        print_schedule(old)
+        print(f"pending={pending}")
+        print(f"next_checkpoint={next_checkpoint}")
+        print_schedule(full if pending else old)
         return
     final = new["epochs"][-1]["producer_id"]
     body = lines[:span[0]] + new_lines + lines[span[1]:]
@@ -1081,7 +1149,9 @@ def cmd_schedule_apply(config, schedule, out):
         f.write(result)
     print(f"status=added {added}")
     print(f"first_new={new['epochs'][n]['from_height']}")
-    print_schedule(new)
+    print(f"pending={pending}")
+    print(f"next_checkpoint={next_checkpoint}")
+    print_schedule(full if pending else new)
 
 
 # --- the release key, the signed manifest and checksum lists ---------------------------------------
@@ -1201,7 +1271,7 @@ COMMANDS = {
     "config": (cmd_config, 1), "key": (cmd_key, 1), "manifest": (cmd_manifest, 1),
     "sums": (cmd_sums, 1), "snapshot-sums": (cmd_snapshot_sums, 2), "record": (cmd_record, 1),
     "page-schedule": (cmd_page_schedule, 2), "schedule-same": (cmd_schedule_same, 2),
-    "schedule-apply": (cmd_schedule_apply, 3),
+    "schedule-apply": (cmd_schedule_apply, 3), "schedule-apply-at": (cmd_schedule_apply, 4),
 }
 
 
@@ -1773,6 +1843,9 @@ step_checkpoint() {
 
 # release_schedule: the core.toml to install: the release's fullnode-core.toml, with the block-maker schedule
 # from the page (or --producer-schedule) when there is one that continues the release's.
+# The node starts only with a chain that reaches the last hand-over block of its schedule, and a new node's
+# chain is the snapshot's: core.toml gets the block makers up to the snapshot checkpoint, and when the
+# schedule goes further, the rest is kept for the timer (see SAVED_SCHEDULE).
 release_schedule() {
   local out status
   TARGET_CONFIG=$DL/fullnode-core.toml
@@ -1780,19 +1853,31 @@ release_schedule() {
   if [[ -z $SCHEDULE ]]; then
     return 0
   fi
-  out=$(py schedule-apply "$DL/fullnode-core.toml" "$SCHEDULE" "$RUN_TMP/core.toml") ||
+  out=$(py schedule-apply-at "$DL/fullnode-core.toml" "$SCHEDULE" "$RUN_TMP/core.toml" "$CP_HEIGHT") ||
     stop "The block-maker schedule $SCHEDULE_FROM cannot be used with this release: $(helper_error)" \
       "Do not continue. Check that it is the schedule on https://qsdm.tech/fullnode.html. If it is, report the difference (SECURITY.md in the QSDM repository)."
   say "  the block-maker schedule $SCHEDULE_FROM:"
   show_schedule "$out"
   status=$(value_of status "$out")
+  PENDING=$(value_of pending "$out")
+  NEXT_CHECKPOINT=$(value_of next_checkpoint "$out")
   if [[ $status == current ]]; then
-    ok "the release's fullnode-core.toml already has this schedule"
-    return 0
+    if ((PENDING == 0)); then
+      ok "the release's fullnode-core.toml already has this schedule"
+      return 0
+    fi
+    ok "the release's fullnode-core.toml carries this schedule up to the snapshot (block $CP_HEIGHT)"
+  else
+    TARGET_CONFIG=$RUN_TMP/core.toml
+    TARGET_WHAT="the release's fullnode-core.toml with the block-maker schedule $SCHEDULE_FROM"
+    if ((PENDING == 0)); then
+      ok "it continues the release's schedule with ${status#added } more block maker(s); core.toml will carry it"
+      return 0
+    fi
+    TARGET_WHAT="the release's fullnode-core.toml with the first part of the block-maker schedule $SCHEDULE_FROM"
+    ok "it continues the release's schedule; core.toml will carry ${status#added } more block maker(s), up to the snapshot (block $CP_HEIGHT)"
   fi
-  TARGET_CONFIG=$RUN_TMP/core.toml
-  TARGET_WHAT="the release's fullnode-core.toml with the block-maker schedule $SCHEDULE_FROM"
-  ok "it continues the release's schedule with ${status#added } more block maker(s); core.toml will carry it"
+  note "the snapshot (block $CP_HEIGHT) is older than block $NEXT_CHECKPOINT, where the schedule hands over to its next block maker, and a node starts only with a chain that reaches the last hand-over block of its schedule. So the node starts with the block makers up to the snapshot, and the timer $STEP_UNIT.timer adds the other $PENDING one at a time, each when the node has reached its hand-over block (a restart each)."
 }
 
 # check_inner_sums: the unpacked snapshot against its own SHA256SUMS.
@@ -1964,6 +2049,28 @@ put_file() {
   fi
 }
 
+# later_schedule_stage: the installed core.toml is the release's with more block makers of SCHEDULE than
+# the snapshot reaches (the timer or --update-schedule added them): both files become the same file with the
+# whole schedule. Sets PENDING and NEXT_CHECKPOINT for the installed file.
+later_schedule_stage() {
+  local installed=$RUN_TMP/core.toml.installed release_full installed_full out
+  as_root cat -- "$P_ETC/core.toml" >"$installed" || return 1
+  out=$(py schedule-apply "$DL/fullnode-core.toml" "$SCHEDULE" "$RUN_TMP/core.toml.release-full") || return 1
+  release_full=$RUN_TMP/core.toml.release-full
+  if [[ $(value_of status "$out") == current ]]; then
+    release_full=$DL/fullnode-core.toml
+  fi
+  out=$(py schedule-apply "$installed" "$SCHEDULE" "$RUN_TMP/core.toml.installed-full") || return 1
+  installed_full=$RUN_TMP/core.toml.installed-full
+  if [[ $(value_of status "$out") == current ]]; then
+    installed_full=$installed
+  fi
+  cmp -s -- "$release_full" "$installed_full" || return 1
+  out=$(py schedule-apply-at "$installed" "$SCHEDULE" "$RUN_TMP/core.toml.unused" "$CP_HEIGHT") || return 1
+  PENDING=$(value_of pending "$out")
+  NEXT_CHECKPOINT=$(value_of next_checkpoint "$out")
+}
+
 step_install() {
   local uid
   step 5 "Install"
@@ -1979,8 +2086,22 @@ step_install() {
   run_root install -d -o "$SERVICE" -g "$SERVICE" -m 0700 "$P_STATE"
   run_root install -d -m 0755 "$P_OPT" "$P_ETC"
   put_file "$BUNDLE/qsdm" "$P_OPT/qsdm" 0755 '' "the qsdm binary of this release"
-  put_file "$TARGET_CONFIG" "$P_ETC/core.toml" 0640 "$SERVICE" "$TARGET_WHAT" \
-    "The installer does not overwrite it. If the block maker changed since this node was set up (qsdm.tech/fullnode.html shows a block-maker schedule), run: $PROG --update-schedule --from-website. If it is from an older release, follow \"Keeping up to date\" in RUN_A_FULL_NODE.md. Otherwise move it away, then run the same command again."
+  local pending=$PENDING next=$NEXT_CHECKPOINT
+  if [[ -n $SCHEDULE ]] && as_root test -f "$P_ETC/core.toml" && ! as_root cmp -s -- "$TARGET_CONFIG" "$P_ETC/core.toml" &&
+    later_schedule_stage; then
+    if [[ $IMPORT_DONE == 0 ]]; then
+      # An earlier run (an installer before this one) put more of the schedule into core.toml than the snapshot
+      # reaches, and the import refused it. Put in the part the snapshot reaches; the timer adds the rest.
+      PENDING=$pending NEXT_CHECKPOINT=$next
+      run_root install -m 0640 -o root -g "$SERVICE" "$TARGET_CONFIG" "$P_ETC/core.toml"
+      ok "$ETC_DIR/core.toml had more block makers than the snapshot reaches (an earlier run); it now has $TARGET_WHAT"
+    else
+      ok "$ETC_DIR/core.toml is already in place, with more block makers of this schedule (added since the install)"
+    fi
+  else
+    put_file "$TARGET_CONFIG" "$P_ETC/core.toml" 0640 "$SERVICE" "$TARGET_WHAT" \
+      "The installer does not overwrite it. If the block maker changed since this node was set up (qsdm.tech/fullnode.html shows a block-maker schedule), run: $PROG --update-schedule --from-website. If it is from an older release, follow \"Keeping up to date\" in RUN_A_FULL_NODE.md. Otherwise move it away, then run the same command again."
+  fi
   core_env_text >"$RUN_TMP/core.env"
   put_file "$RUN_TMP/core.env" "$P_ETC/core.env" 0640 "$SERVICE" "the guide's core.env for this API"
   if [[ $IMPORT_DONE == 0 ]]; then
@@ -2068,6 +2189,9 @@ step_start() {
     ok "the node is already running"
   else
     run_root systemctl enable --now "$SERVICE"
+  fi
+  if ((PENDING > 0)); then
+    start_schedule_timer "$SCHEDULE"
   fi
 }
 
@@ -2208,6 +2332,85 @@ step_check_network() {
 }
 
 # ---------------------------------------------------------------------------------------------------
+# The schedule timer: the block makers a node's chain has not reached yet
+# ---------------------------------------------------------------------------------------------------
+
+step_service_text() {
+  cat <<EOF
+# $STEP_SERVICE_FILE
+[Unit]
+Description=QSDM full node: the next block maker of the saved schedule
+After=$SERVICE.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash $INSTALLER_COPY --continue-schedule --api $API_BASE --work-dir $WORK_DIR --wait-minutes 10
+EOF
+}
+
+step_timer_text() {
+  cat <<EOF
+# $STEP_TIMER_FILE
+[Unit]
+Description=QSDM full node: check every 10 minutes for the next block maker of the saved schedule
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=10min
+
+[Install]
+WantedBy=timers.target
+EOF
+}
+
+# this_installer: the path of this script, which the timer runs a copy of.
+this_installer() {
+  local self
+  self=$(readlink -f -- "${BASH_SOURCE[0]}" 2>/dev/null) || return 1
+  [[ -f $self && -r $self ]] || return 1
+  printf '%s' "$self"
+}
+
+# start_schedule_timer FILE: keep the full schedule FILE, a copy of this installer and the timer that adds
+# the block makers the node's chain has not reached yet.
+start_schedule_timer() {
+  local self
+  self=$(this_installer) ||
+    stop "The installer must run from a saved file to set up $STEP_UNIT.timer (it keeps a copy of itself)." \
+      "Download install-full-node.sh as RUN_A_FULL_NODE.md says, then run the same command again."
+  if ! as_root cmp -s -- "$1" "$P_SAVED"; then
+    run_root install -m 0644 "$1" "$P_SAVED"
+  fi
+  if ! as_root cmp -s -- "$self" "$P_COPY"; then
+    run_root install -m 0755 "$self" "$P_COPY"
+  fi
+  step_service_text >"$RUN_TMP/$STEP_UNIT.service"
+  step_timer_text >"$RUN_TMP/$STEP_UNIT.timer"
+  if ! as_root cmp -s -- "$RUN_TMP/$STEP_UNIT.service" "$P_STEP_SERVICE" ||
+    ! as_root cmp -s -- "$RUN_TMP/$STEP_UNIT.timer" "$P_STEP_TIMER"; then
+    if ! as_root test -d "${P_STEP_SERVICE%/*}"; then
+      run_root install -d -m 0755 "${P_STEP_SERVICE%/*}"
+    fi
+    run_root install -m 0644 "$RUN_TMP/$STEP_UNIT.service" "$P_STEP_SERVICE"
+    run_root install -m 0644 "$RUN_TMP/$STEP_UNIT.timer" "$P_STEP_TIMER"
+    run_root systemctl daemon-reload
+  fi
+  run_root systemctl enable --now "$STEP_UNIT.timer"
+  ok "$STEP_UNIT.timer adds the other $PENDING block maker(s) of the schedule kept in $SAVED_SCHEDULE, the next when your node has block $NEXT_CHECKPOINT"
+}
+
+# end_schedule_timer: every block maker is in core.toml, so the timer and its service go.
+end_schedule_timer() {
+  if ! as_root test -e "$P_STEP_TIMER" && ! as_root test -e "$P_STEP_SERVICE"; then
+    return 0
+  fi
+  run_root systemctl disable --now "$STEP_UNIT.timer"
+  run_root rm -f -- "$P_STEP_TIMER" "$P_STEP_SERVICE"
+  run_root systemctl daemon-reload
+  ok "every block maker of the schedule is in core.toml: $STEP_UNIT.timer is removed"
+}
+
+# ---------------------------------------------------------------------------------------------------
 # --update-schedule: a new block maker, for a node this installer set up
 # ---------------------------------------------------------------------------------------------------
 
@@ -2241,7 +2444,7 @@ restore_config() {
 }
 
 update_schedule() {
-  local installed=$RUN_TMP/core.toml.installed new=$RUN_TMP/core.toml.new out status port deadline backup
+  local installed=$RUN_TMP/core.toml.installed new=$RUN_TMP/core.toml.new out status port deadline backup tip
   STEP_TOTAL=3 CHECK_STEP=3
   say "QSDM full-node installer: a new block-maker schedule for this node (RUN_A_FULL_NODE.md, \"When the block maker changes\")"
   step 1 "Compare the new schedule with this node's"
@@ -2255,14 +2458,46 @@ update_schedule() {
     stop "$ETC_DIR/core.toml cannot be read: $(helper_error)" "Was it changed by hand? Compare it with the release's fullnode-core.toml."
   port=$(value_of api_port "$out")
   LOCAL_API=http://127.0.0.1:$port/api/v1
-  out=$(py schedule-apply "$installed" "$SCHEDULE" "$new") ||
-    stop "The new schedule cannot be used for this node, so nothing was changed: $(helper_error)" \
-      "Check that it is the schedule on https://qsdm.tech/fullnode.html. If it is, report the difference (SECURITY.md in the QSDM repository)."
+  # A node starts only with a chain that reaches the last hand-over block of its schedule: it gets the block
+  # makers its chain reaches now, and the timer adds the others later. A node that does not answer gets the
+  # whole schedule (if its chain is too short, it does not start and the old file goes back).
+  if tip=$(tip_of "$LOCAL_API"); then
+    say "  your node's chain ends at block $tip"
+    out=$(py schedule-apply-at "$installed" "$SCHEDULE" "$new" "$tip") ||
+      stop "The new schedule cannot be used for this node, so nothing was changed: $(helper_error)" \
+        "Check that it is the schedule on https://qsdm.tech/fullnode.html. If it is, report the difference (SECURITY.md in the QSDM repository)."
+  elif [[ $CONTINUE_SCHEDULE == 1 ]]; then
+    say "  your node does not answer on $LOCAL_API now; $STEP_UNIT.timer tries again later"
+    exit 0
+  else
+    out=$(py schedule-apply "$installed" "$SCHEDULE" "$new") ||
+      stop "The new schedule cannot be used for this node, so nothing was changed: $(helper_error)" \
+        "Check that it is the schedule on https://qsdm.tech/fullnode.html. If it is, report the difference (SECURITY.md in the QSDM repository)."
+  fi
   show_schedule "$out"
   status=$(value_of status "$out")
   FIRST_NEW=$(value_of first_new "$out")
+  PENDING=$(value_of pending "$out")
+  NEXT_CHECKPOINT=$(value_of next_checkpoint "$out")
   if [[ $status == current ]]; then
+    if ((PENDING > 0)); then
+      ok "this node has every block maker its chain reaches; the next one takes over after block $NEXT_CHECKPOINT, which your node does not have yet (it waits there)"
+      if [[ $DRY_RUN == 1 || $CONTINUE_SCHEDULE == 1 ]]; then
+        return 0
+      fi
+      check_system
+      prepare_sudo
+      prepare_work_dir
+      start_schedule_timer "$SCHEDULE"
+      return 0
+    fi
     ok "this node already has this schedule: nothing to change"
+    if [[ $CONTINUE_SCHEDULE == 1 ]]; then
+      check_system
+      prepare_sudo
+      end_schedule_timer
+      return 0
+    fi
     if [[ $DRY_RUN == 1 ]] || ! systemctl is-active --quiet "$SERVICE"; then
       return 0
     fi
@@ -2271,6 +2506,9 @@ update_schedule() {
     return 0
   fi
   ok "it continues this node's schedule with ${status#added } more block maker(s), the first from block $FIRST_NEW"
+  if ((PENDING > 0)); then
+    note "$PENDING more block maker(s) follow when your node has block $NEXT_CHECKPOINT; $STEP_UNIT.timer adds them"
+  fi
   if [[ $DRY_RUN == 1 ]]; then
     print_update_plan
     exit 0
@@ -2291,6 +2529,10 @@ update_schedule() {
     if systemctl is-failed --quiet "$SERVICE"; then
       show_journal
       restore_config "$backup"
+      if [[ $CONTINUE_SCHEDULE == 1 ]]; then
+        # Not again every 10 minutes: the timer goes, and the log says what happened.
+        end_schedule_timer
+      fi
       stop "The node did not start with the new schedule: systemd reports $SERVICE as failed. The old configuration is back in place and the node was restarted with it." \
         "Read its log with: journalctl -u $SERVICE -n 200. Check that the schedule is the one on https://qsdm.tech/fullnode.html; if it is, report the log (SECURITY.md in the QSDM repository)."
     fi
@@ -2305,6 +2547,11 @@ update_schedule() {
     note "your node has not reached block $FIRST_NEW, the new block maker's first, yet. It carries on by itself: run the same command again later to repeat the check."
   elif ((CHECK_LOCAL_TIP >= FIRST_NEW)); then
     ok "your node follows the new block maker (block $FIRST_NEW and later)"
+  fi
+  if ((PENDING > 0)); then
+    start_schedule_timer "$SCHEDULE"
+  else
+    end_schedule_timer
   fi
 }
 
@@ -2321,6 +2568,14 @@ On its first start the node made its own consensus key: a local identity that ho
 private. Run the same command again at any time to repeat the check against the network.
 The work folder $WORK_DIR holds the small release files and the logs; you may delete it.
 EOF
+  if ((PENDING > 0)); then
+    cat <<EOF
+Block makers: the node carries the schedule up to the snapshot. $STEP_UNIT.timer adds the other
+$PENDING block maker(s) from $SAVED_SCHEDULE, the next when the node has block $NEXT_CHECKPOINT
+(a restart each), then removes itself. Until then the node waits at each hand-over block. Keep the
+work folder until then (the timer uses it). Watch it with: journalctl -u $STEP_UNIT
+EOF
+  fi
 }
 
 main() {
@@ -2346,13 +2601,25 @@ main() {
   resolve_schedule
   if [[ $UPDATE_SCHEDULE == 1 ]]; then
     derive_names
+    if [[ $CONTINUE_SCHEDULE == 1 ]]; then
+      if ! as_root test -f "$P_SAVED"; then
+        say "There is no saved block-maker schedule ($SAVED_SCHEDULE): nothing to continue."
+        exit 0
+      fi
+      as_root cat -- "$P_SAVED" >"$RUN_TMP/saved-schedule.toml" || stop "Could not read $SAVED_SCHEDULE."
+      SCHEDULE=$RUN_TMP/saved-schedule.toml SCHEDULE_FROM="kept in $SAVED_SCHEDULE"
+    fi
     if [[ -z $SCHEDULE ]]; then
       say "$WEBSITE_URL shows no block-maker schedule: the block maker has not changed since the release, so this node needs no update."
       exit 0
     fi
     update_schedule
     say ""
-    say "Done: the node carries the block-maker schedule $SCHEDULE_FROM."
+    if ((PENDING > 0)); then
+      say "Done for now: the node carries the block-maker schedule $SCHEDULE_FROM as far as its chain reaches. $STEP_UNIT.timer adds the other $PENDING block maker(s), the next when the node has block $NEXT_CHECKPOINT."
+    else
+      say "Done: the node carries the block-maker schedule $SCHEDULE_FROM."
+    fi
     exit 0
   fi
   require_values

@@ -76,6 +76,52 @@ describe('QSDM Hive IPC validation', () => {
         },
       ])
     ).toThrow(/amount is below/);
+
+    expect(() =>
+      validateIpcPayload(Endpoints.TRANSFER_CELL_FROM_MAIN_WALLET, [
+        {
+          accountName: 'Blackbeard',
+          amount: 1,
+          toWalletAddress: validAddress,
+          fromAddress: validAddress,
+        },
+      ])
+    ).not.toThrow();
+
+    expect(() =>
+      validateIpcPayload(Endpoints.TRANSFER_CELL_FROM_MAIN_WALLET, [
+        {
+          accountName: 'Blackbeard',
+          amount: 1,
+          toWalletAddress: validAddress,
+          fromAddress: '../not-a-wallet',
+        },
+      ])
+    ).toThrow(/fromAddress has an invalid format/);
+  });
+
+  it('accepts only a wallet address, a known list and a bounded page for Recent transactions', () => {
+    const address = 'a'.repeat(64);
+    expect(() =>
+      validateIpcPayload(Endpoints.GET_QSDM_WALLET_HISTORY, [
+        { address, kind: 'rewards', before: 'cursor-1', limit: 50 },
+      ])
+    ).not.toThrow();
+    expect(() =>
+      validateIpcPayload(Endpoints.GET_QSDM_WALLET_HISTORY, [
+        { address: '../wallet' },
+      ])
+    ).toThrow(/address/);
+    expect(() =>
+      validateIpcPayload(Endpoints.GET_QSDM_WALLET_HISTORY, [
+        { address, kind: 'all' },
+      ])
+    ).toThrow(/kind must be transfers or rewards/);
+    expect(() =>
+      validateIpcPayload(Endpoints.GET_QSDM_WALLET_HISTORY, [
+        { address, limit: 201 },
+      ])
+    ).toThrow(/limit is above/);
   });
 
   it('rejects unsupported signed task actions', () => {
@@ -176,6 +222,61 @@ describe('QSDM Hive IPC validation', () => {
         },
       ])
     ).toThrow(/valid JSON/);
+  });
+
+  it('validates the wallet list calls', () => {
+    expect(() =>
+      validateIpcPayload(Endpoints.LIST_QSDM_WALLETS, [])
+    ).not.toThrow();
+    expect(() =>
+      validateIpcPayload(Endpoints.ACTIVATE_QSDM_WALLET, [
+        { address: validAddress },
+      ])
+    ).not.toThrow();
+    expect(() =>
+      validateIpcPayload(Endpoints.ACTIVATE_QSDM_WALLET, [
+        { address: '../wallet' },
+      ])
+    ).toThrow();
+    expect(() =>
+      validateIpcPayload(Endpoints.RENAME_QSDM_WALLET, [
+        { address: validAddress, label: 'x'.repeat(41) },
+      ])
+    ).toThrow();
+    expect(() =>
+      validateIpcPayload(Endpoints.FORGET_QSDM_WALLET, [
+        { address: validAddress, confirmAddress: validAddress },
+      ])
+    ).not.toThrow();
+    expect(() =>
+      validateIpcPayload(Endpoints.FORGET_QSDM_WALLET, [
+        { address: validAddress },
+      ])
+    ).toThrow();
+    expect(() =>
+      validateIpcPayload(Endpoints.RECOVER_QSDM_WALLET, [
+        { backupFile: 'wallet.json.bak-1795029829858' },
+      ])
+    ).not.toThrow();
+    expect(() =>
+      validateIpcPayload(Endpoints.RECOVER_QSDM_WALLET, [
+        { backupFile: '../../wallet.json.bak-1795029829858' },
+      ])
+    ).toThrow(/backupFile/);
+    expect(() =>
+      validateIpcPayload(Endpoints.CREATE_QSDM_SIGNER_WALLET, [
+        {
+          passphrase: 'correct horse battery staple',
+          label: 'Savings',
+          makeActive: true,
+        },
+      ])
+    ).not.toThrow();
+    expect(() =>
+      validateIpcPayload(Endpoints.CREATE_QSDM_SIGNER_WALLET, [
+        { passphrase: 'correct horse battery staple', makeActive: 'yes' },
+      ])
+    ).toThrow(/makeActive/);
   });
 
   it('requires a strong-enough passphrase for new QSDM wallets', () => {

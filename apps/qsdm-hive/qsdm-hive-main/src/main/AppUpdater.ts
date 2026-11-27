@@ -9,6 +9,15 @@ import { RendererEndpoints } from 'config/endpoints';
 
 import { app } from './app';
 import { getAppDataPath } from './node/helpers/getAppDataPath';
+import { isHiveE2ETestRun } from './services/hiveE2E';
+import {
+  decideHiveUpdateOffer,
+  getHiveInstallId,
+} from './services/hiveRollout';
+import {
+  getDownloadedHiveUpdate,
+  setDownloadedHiveUpdate,
+} from './services/hiveUpdateState';
 import {
   getCurrentHiveVersion,
   hasOwnSignedReleaseChannel,
@@ -46,7 +55,10 @@ let listenersConfigured = false;
 let trustedRelease: VerifiedQsdmHiveRelease | null = null;
 let updateCheckPromise: Promise<UpdateCheckResult | null> | null = null;
 let updateDownloadPromise: Promise<string[]> | null = null;
-let installPromptOpen = false;
+// "Restart to update" was pressed before the update finished downloading.
+let installRequested = false;
+let installing = false;
+let installCleanup: () => Promise<void> = async () => undefined;
 
 export const QSDM_HIVE_NO_SELF_UPDATE_MESSAGE =
   'QSDM Hive does not update itself on macOS: there is no signed Mac release yet. Download new versions from https://qsdm.tech/download.html.';
@@ -66,6 +78,11 @@ export function shouldEnableAutoUpdates(
   // Windows or Linux update there. The version policy still checks the version
   // (against the signed Linux release) and links to the download page.
   if (!hasOwnSignedReleaseChannel(platform)) {
+    return false;
+  }
+
+  // An end-to-end test run of a build that is not packaged (see hiveE2E.ts).
+  if (isHiveE2ETestRun(env)) {
     return false;
   }
 
@@ -114,6 +131,7 @@ export async function initializeAppUpdater(
   }
 
   await ensureAppUpdaterConfigured();
+  installCleanup = appCleanup;
   setListeners(mainWindow, appCleanup);
   createCheckForTheUpdatesInterval();
   runScheduledUpdateCheck('startup');
@@ -270,38 +288,46 @@ function setListeners(
       return;
     }
 
+    // No prompt: Hive (and its miner) keeps running, and the renderer shows
+    // a persistent "Restart to update" banner until the user restarts.
+    setDownloadedHiveUpdate(info.version);
     sendRendererEvent(mainWindow, RendererEndpoints.UPDATE_DOWNLOADED, info);
-    revealMainWindow(mainWindow);
 
-    if (installPromptOpen) {
-      return;
-    }
-    installPromptOpen = true;
-    try {
-      const options = {
-        type: 'question' as const,
-        title: 'QSDM Hive Update Ready',
-        buttons: ['Update and Restart'],
-        defaultId: 0,
-        cancelId: 0,
-        noLink: true,
-        message: 'The approved QSDM Hive update is ready.',
-        detail: `Version ${info.version} must be installed before Hive can continue.`,
-      };
-      const result =
-        mainWindow && !mainWindow.isDestroyed()
-          ? await dialog.showMessageBox(mainWindow, options)
-          : await dialog.showMessageBox(options);
-      if (result.response !== 0) {
-        return;
-      }
-      await appCleanup();
-      app.isQuitting = true;
-      autoUpdater.quitAndInstall();
-    } finally {
-      installPromptOpen = false;
+    if (installRequested) {
+      await installDownloadedUpdate(appCleanup);
     }
   });
+}
+
+async function installDownloadedUpdate(cleanup: () => Promise<void>) {
+  if (installing) return;
+  installing = true;
+  await cleanup();
+  app.isQuitting = true;
+  autoUpdater.quitAndInstall();
+}
+
+/**
+ * "Restart to update": installs the verified update now, or downloads it
+ * first and installs it as soon as it is verified. Never on macOS, which has
+ * no signed release of its own (the renderer opens the download page there).
+ */
+export async function restartToUpdate(): Promise<{ restarting: boolean }> {
+  if (!hasOwnSignedReleaseChannel()) {
+    throw new Error(QSDM_HIVE_NO_SELF_UPDATE_MESSAGE);
+  }
+  if (getDownloadedHiveUpdate()) {
+    await installDownloadedUpdate(installCleanup);
+    return { restarting: true };
+  }
+  installRequested = true;
+  try {
+    await downloadTrustedAppUpdate();
+  } catch (error) {
+    installRequested = false;
+    throw error;
+  }
+  return { restarting: false };
 }
 
 function createCheckForTheUpdatesInterval() {
@@ -313,7 +339,8 @@ function createCheckForTheUpdatesInterval() {
 }
 
 async function runUpdateCheck(
-  reason: string
+  reason: string,
+  { stagedRollout = false }: { stagedRollout?: boolean } = {}
 ): Promise<UpdateCheckResult | null> {
   // Every check, scheduled or asked for by the update screen, goes through
   // here: on macOS the updater is never configured, fetched or run, so no
@@ -328,7 +355,24 @@ async function runUpdateCheck(
   updateCheckPromise = (async () => {
     log.info(`QSDM Hive ${reason} update check`);
     await ensureAppUpdaterConfigured();
-    await ensureTrustedReleaseForUpdate(true);
+    const release = await ensureTrustedReleaseForUpdate(true);
+    // Automatic checks respect the signed staged rollout (rollout_percent).
+    // A Hive the release no longer supports updates anyway, and a check the
+    // user asks for is never held back. See services/hiveRollout.ts.
+    if (stagedRollout) {
+      const offer = decideHiveUpdateOffer({
+        currentVersion: getCurrentHiveVersion(),
+        manifest: release.manifest,
+        installId: getHiveInstallId,
+      });
+      if (offer.reason === 'outside-rollout') {
+        log.info(
+          `QSDM Hive ${release.manifest.version} is rolling out to ${offer.rolloutPercent}% of Hives; this Hive is not in it yet.`
+        );
+        clearRetryTimeout();
+        return null;
+      }
+    }
     const result = await autoUpdater.checkForUpdates();
     clearRetryTimeout();
     return result;
@@ -346,7 +390,7 @@ async function runUpdateCheck(
 
 async function runScheduledUpdateCheck(reason: string) {
   try {
-    await runUpdateCheck(reason);
+    await runUpdateCheck(reason, { stagedRollout: true });
   } catch (error) {
     log.error('QSDM Hive update check failed', error);
   }
@@ -429,5 +473,8 @@ export function resetAppUpdaterForTests() {
   trustedRelease = null;
   updateCheckPromise = null;
   updateDownloadPromise = null;
-  installPromptOpen = false;
+  installRequested = false;
+  installing = false;
+  installCleanup = async () => undefined;
+  setDownloadedHiveUpdate(null);
 }

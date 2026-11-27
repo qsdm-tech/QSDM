@@ -1,5 +1,7 @@
 # One-time: password auth to append SSH pubkey, upload local QSDM tree, run install-ubuntu-vps.sh.
-# Usage: set QSDM_VPS_PASS, then: python remote_bootstrap_paramiko.py
+# Usage: set QSDM_VPS_PASS, then: python remote_bootstrap_paramiko.py [--known-hosts FILE]
+# The VPS host key must already be in known_hosts (--known-hosts FILE, else
+# QSDM_SSH_KNOWN_HOSTS, else ~/.ssh/known_hosts); unknown hosts are refused.
 # Do not commit secrets.
 
 import os
@@ -11,7 +13,14 @@ from pathlib import Path
 
 import paramiko
 
-from _deploy_host import host as _host, port as _port, require_root_user as _require_root_user, user as _user
+from _deploy_host import (
+    host as _host,
+    known_hosts_argument as _known_hosts_argument,
+    pin_host_keys as _pin_host_keys,
+    port as _port,
+    require_root_user as _require_root_user,
+    user as _user,
+)
 
 HOST = _host()
 USER = _user()
@@ -76,11 +85,12 @@ def make_qsdm_tarball(root: Path) -> Path:
 
 def main() -> int:
     _require_root_user("remote_bootstrap_paramiko.py")
+    known_hosts, args = _known_hosts_argument(sys.argv[1:])
     pw = os.environ.get("QSDM_VPS_PASS")
     if not pw:
         print("Set QSDM_VPS_PASS (or pass as argv[1] for this run only).", file=sys.stderr)
-        if len(sys.argv) >= 2:
-            pw = sys.argv[1]
+        if args:
+            pw = args[0]
         else:
             return 1
     if not PUB.is_file():
@@ -92,7 +102,7 @@ def main() -> int:
         return 1
 
     c = paramiko.SSHClient()
-    c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    _pin_host_keys(c, known_hosts)
     c.connect(
         HOST,
         port=PORT,

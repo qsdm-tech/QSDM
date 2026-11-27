@@ -14,6 +14,8 @@ import {
   QsdmMiningAccountResponse,
 } from 'models/api/qsdm';
 
+import { assertQsdmCanonicalChainSafety } from './qsdmCanonicalChain';
+import { getQsdmRetryAfterMs, isQsdmRateLimited } from './qsdmHttpRetry';
 import {
   getQsdmTaskActionCliPath,
   getQsdmTaskActionKeystorePath,
@@ -21,7 +23,6 @@ import {
   getQsdmTaskActionSender,
   getQsdmTaskActionSignerMode,
 } from './qsdmTaskActionSigner';
-import { assertQsdmCanonicalChainSafety } from './qsdmCanonicalChain';
 
 type UnsignedQsdmTaskActionEnvelope = Omit<
   QsdmTaskActionEnvelope,
@@ -163,118 +164,8 @@ const isTransientTaskActionSubmitError = (error: unknown) => {
 
 // Do not let an announced maintenance window hold the sender queue open.
 // Short hints can be honored by the existing idempotent retry loop instead.
-const getTaskActionRetryAfterMs = (error: unknown): number | undefined => {
-  if (
-    !axios.isAxiosError(error) ||
-    ![429, 503].includes(error.response?.status || 0)
-  ) {
-    return undefined;
-  }
-  const headers = error.response?.headers;
-  const key =
-    headers &&
-    Object.keys(headers).find((name) => name.toLowerCase() === 'retry-after');
-  const raw = key ? headers?.[key] : undefined;
-  if (typeof raw !== 'string' && typeof raw !== 'number') return undefined;
-  const value = String(raw).trim();
-  if (/^\d+$/.test(value)) {
-    // A syntactically valid, enormous wait must also stop retries. Infinity is
-    // deliberately retained here and never passed to setTimeout.
-    return Number(value) * 1000;
-  }
-  // Accept the three HTTP-date forms without Date.parse's permissive numeric
-  // parsing or local-time interpretation of the obsolete asctime form.
-  const months = [
-    'Jan',
-    'Feb',
-    'Mar',
-    'Apr',
-    'May',
-    'Jun',
-    'Jul',
-    'Aug',
-    'Sep',
-    'Oct',
-    'Nov',
-    'Dec',
-  ];
-  const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  const fullWeekdays = [
-    'Sunday',
-    'Monday',
-    'Tuesday',
-    'Wednesday',
-    'Thursday',
-    'Friday',
-    'Saturday',
-  ];
-  const standard =
-    /^(Sun|Mon|Tue|Wed|Thu|Fri|Sat), (\d{2}) ([A-Z][a-z]{2}) (\d{4}) (\d{2}):(\d{2}):(\d{2}) GMT$/.exec(
-      value
-    );
-  const obsolete =
-    /^(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday), (\d{2})-([A-Z][a-z]{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2}) GMT$/.exec(
-      value
-    );
-  const asctime =
-    /^(Sun|Mon|Tue|Wed|Thu|Fri|Sat) ([A-Z][a-z]{2}) ([ \d]\d) (\d{2}):(\d{2}):(\d{2}) (\d{4})$/.exec(
-      value
-    );
-  const fields =
-    standard ||
-    obsolete ||
-    (asctime && [
-      asctime[0],
-      asctime[1],
-      asctime[3],
-      asctime[2],
-      asctime[7],
-      asctime[4],
-      asctime[5],
-      asctime[6],
-    ]);
-  if (!fields) return undefined;
-  const month = months.indexOf(fields[3]);
-  const day = Number(fields[2]);
-  const hour = Number(fields[5]);
-  const minute = Number(fields[6]);
-  const second = Number(fields[7]);
-  if (
-    month < 0 ||
-    day < 1 ||
-    day > 31 ||
-    hour > 23 ||
-    minute > 59 ||
-    second > 60
-  )
-    return undefined;
-  const now = new Date();
-  let year = Number(fields[4]);
-  if (obsolete) year += Math.floor(now.getUTCFullYear() / 100) * 100;
-  const date = new Date(0);
-  date.setUTCFullYear(year, month, day);
-  // Validate the stated calendar day before carrying a permitted leap second
-  // into the following minute or day.
-  const leapSecondMs = second === 60 ? 1000 : 0;
-  date.setUTCHours(hour, minute, Math.min(second, 59), 0);
-  if (obsolete) {
-    const futureLimit = new Date(now);
-    futureLimit.setUTCFullYear(now.getUTCFullYear() + 50);
-    if (date.getTime() + leapSecondMs > futureLimit.getTime()) {
-      year -= 100;
-      date.setUTCFullYear(year);
-    }
-  }
-  const weekday = (obsolete ? fullWeekdays : weekdays).indexOf(fields[1]);
-  if (
-    date.getUTCFullYear() !== year ||
-    date.getUTCMonth() !== month ||
-    date.getUTCDate() !== day ||
-    date.getUTCDay() !== weekday
-  )
-    return undefined;
-  return Math.max(0, date.getTime() + leapSecondMs - now.getTime());
-};
+// The shared parser (qsdmHttpRetry) of Retry-After on 429 and 503 answers.
+const getTaskActionRetryAfterMs = getQsdmRetryAfterMs;
 
 const taskActionRetryDeferredError = (retryAfterMs: number) => {
   const wait = Number.isFinite(retryAfterMs)
@@ -706,6 +597,14 @@ export const submitQsdmTaskActionIntent = async ({
             };
           }
           const retryAfterMs = getTaskActionRetryAfterMs(error);
+          // The shared retry (qsdmHttpRetry) already retried an HTTP 429 for
+          // up to one rate-limit window; retrying it here again would
+          // multiply that wait.
+          if (isQsdmRateLimited(error)) {
+            throw retryAfterMs === undefined
+              ? error
+              : taskActionRetryDeferredError(retryAfterMs);
+          }
           const retryDelayMs = Math.max(
             retryBaseMs * 2 ** (attempt - 1),
             retryAfterMs || 0
@@ -761,5 +660,135 @@ export const submitQsdmTaskActionIntent = async ({
       await waitForTaskActionNonceCommit(sender, response.client_nonce);
     }
     return response;
+  });
+};
+
+// ---------------------------------------------------------------------------
+// PULSE pool membership (join, leave, reclaim). These are member transactions
+// on the chain (POST /pulse/submit-signed), signed by qsdmcli with the unlocked
+// wallet. They bump the same account nonce as task actions, so they share the
+// per-sender queue and nonce reservation above.
+
+export type QsdmPulseAction =
+  | { op: 'join'; pool: string }
+  | { op: 'leave' }
+  | { op: 'reclaim'; proofs: string[] };
+
+export type QsdmPulseEnvelope = {
+  sender: string;
+  nonce: number;
+  fee: number;
+  payload: unknown;
+  public_key: string;
+  signature: string;
+};
+
+export type QsdmPulseSubmitResult = {
+  tx_id?: string;
+  status?: string;
+  nonce: number;
+};
+
+const HEX64 = /^[0-9a-f]{64}$/;
+
+export const validateQsdmPulseAction = (action: QsdmPulseAction) => {
+  if (action.op === 'join') {
+    if (!HEX64.test(action.pool || '')) {
+      throw new Error('PULSE join needs the pool ID (64 lowercase hex)');
+    }
+    return;
+  }
+  if (action.op === 'leave') return;
+  if (action.op === 'reclaim') {
+    const proofs = action.proofs || [];
+    if (proofs.length === 0 || proofs.length > 256) {
+      throw new Error('PULSE reclaim needs 1-256 escrowed proof IDs');
+    }
+    if (new Set(proofs).size !== proofs.length) {
+      throw new Error('PULSE reclaim proof IDs must be distinct');
+    }
+    return;
+  }
+  throw new Error('unknown PULSE action');
+};
+
+export const signQsdmPulseActionWithCli = async (request: {
+  sender: string;
+  nonce: number;
+  fee: number;
+  action: QsdmPulseAction;
+}): Promise<QsdmPulseEnvelope> => {
+  assertCliSignerConfigured();
+  validateQsdmPulseAction(request.action);
+  const stdout = await runQsdmCli({
+    args: buildWalletArgs('sign-pulse-action', [
+      '--request-file',
+      '-',
+      '--passphrase-file',
+      getQsdmTaskActionPassphraseFile(),
+    ]),
+    stdin: JSON.stringify(request),
+    timeoutMessage: 'qsdmcli PULSE signing timed out',
+  });
+  return JSON.parse(stdout.trim()) as QsdmPulseEnvelope;
+};
+
+export const submitQsdmPulseAction = async (
+  action: QsdmPulseAction
+): Promise<QsdmPulseSubmitResult> => {
+  validateQsdmPulseAction(action);
+  const sender = getQsdmTaskActionSender();
+  if (!sender) {
+    throw new Error('Unlock or import a QSDM wallet in Hive first');
+  }
+  return runQueuedTaskActionForSender(sender, async () => {
+    await assertQsdmCanonicalChainSafety({ forceRefresh: true });
+    const nonce = reserveTaskActionNonce(
+      sender,
+      await getNextTaskActionNonce(sender)
+    );
+    if (nonce === undefined) {
+      throw new Error(
+        "Could not read this wallet's nonce from QSDM Core; try again shortly"
+      );
+    }
+    const envelope = await signQsdmPulseActionWithCli({
+      sender,
+      nonce,
+      fee: 0,
+      action,
+    });
+    const safety = await assertQsdmCanonicalChainSafety({ forceRefresh: true });
+    const apiUrl = resolveQsdmTaskActionApiUrl({
+      runtimeApiUrl: safety.effectiveApiUrl,
+      canonicalApiUrl: safety.canonicalApiUrl,
+    });
+    try {
+      const response = await axios.post<{ tx_id?: string; status?: string }>(
+        `${apiUrl}/pulse/submit-signed`,
+        envelope,
+        { timeout: 10000 }
+      );
+      await waitForTaskActionNonceCommit(sender, nonce);
+      return { ...response.data, nonce };
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 409) {
+        throw new Error(
+          'The PULSE pool rule is not active on the network yet; joining opens at its activation height'
+        );
+      }
+      const detail =
+        axios.isAxiosError(error) &&
+        error.response?.data &&
+        typeof error.response.data === 'object'
+          ? (error.response.data as { message?: string; error?: string })
+              .message || (error.response.data as { error?: string }).error
+          : undefined;
+      throw new Error(
+        `PULSE ${action.op} was not accepted: ${
+          detail || (error as Error).message
+        }`
+      );
+    }
   });
 };

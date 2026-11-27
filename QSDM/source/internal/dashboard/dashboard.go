@@ -1023,10 +1023,23 @@ func (d *Dashboard) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	redirectTarget := "/"
-	if red := strings.TrimSpace(r.URL.Query().Get("redirect")); red != "" {
+	if red := strings.TrimSpace(r.URL.Query().Get("redirect")); isLocalRedirect(red) {
 		redirectTarget = red
 	}
 	http.Redirect(w, r, redirectTarget, http.StatusFound)
+}
+
+// isLocalRedirect reports whether s is a path on this dashboard, so a login
+// may redirect there: it starts with a single "/", is not protocol-relative
+// ("//host", or "/\host", which browsers read as "//host"), and parses with no
+// scheme and no host. url.Parse also refuses control characters, such as a
+// tab that a browser would drop to turn "/\t/host" into "//host".
+func isLocalRedirect(s string) bool {
+	if s == "" || s[0] != '/' || strings.HasPrefix(s, "//") || strings.HasPrefix(s, "/\\") {
+		return false
+	}
+	u, err := url.Parse(s)
+	return err == nil && u.Scheme == "" && u.Host == ""
 }
 
 func (d *Dashboard) loginThroughAPI(address, password string) (string, int, string) {

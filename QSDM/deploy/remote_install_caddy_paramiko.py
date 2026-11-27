@@ -2,7 +2,10 @@
 
 Usage (Powershell):
     $env:QSDM_VPS_PASS = '...'
-    python deploy/remote_install_caddy_paramiko.py
+    python deploy/remote_install_caddy_paramiko.py [--known-hosts FILE]
+
+The VPS host key must already be in known_hosts (--known-hosts FILE, else
+QSDM_SSH_KNOWN_HOSTS, else ~/.ssh/known_hosts); unknown hosts are refused.
 """
 from __future__ import annotations
 
@@ -14,7 +17,14 @@ from pathlib import Path
 import paramiko
 from paramiko import Transport
 
-from _deploy_host import host as _host, port as _port, require_root_user as _require_root_user, user as _user
+from _deploy_host import (
+    host as _host,
+    known_hosts_argument as _known_hosts_argument,
+    port as _port,
+    require_root_user as _require_root_user,
+    start_pinned_transport as _start_pinned_transport,
+    user as _user,
+)
 
 HOST = _host()
 USER = _user()
@@ -31,14 +41,15 @@ def upload_text(sftp: paramiko.SFTPClient, local: Path, remote: str) -> None:
 
 def main() -> int:
     _require_root_user("remote_install_caddy_paramiko.py")
-    pw = os.environ.get("QSDM_VPS_PASS") or (sys.argv[1] if len(sys.argv) > 1 else "")
+    known_hosts, args = _known_hosts_argument(sys.argv[1:])
+    pw = os.environ.get("QSDM_VPS_PASS") or (args[0] if args else "")
     if not pw:
         print("Set QSDM_VPS_PASS", file=sys.stderr)
         return 1
 
     sock = socket.create_connection((HOST, PORT), timeout=30)
     t = Transport(sock)
-    t.start_client(timeout=30)
+    _start_pinned_transport(t, HOST, PORT, known_hosts, timeout=30)
     t.auth_password(USER, pw)
     t.set_keepalive(30)
 

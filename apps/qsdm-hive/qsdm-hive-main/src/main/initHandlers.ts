@@ -56,6 +56,10 @@ const endpointToControllerMap: Record<
   [Endpoints.GET_QSDM_CELL_ACCOUNT]: controllers.getQsdmCellAccount,
   [Endpoints.GET_QSDM_MINER_REWARD_STATUS]:
     controllers.getQsdmMinerRewardStatus,
+  [Endpoints.GET_QSDM_PULSE_POOL]: controllers.getQsdmPulsePool,
+  [Endpoints.SET_QSDM_PULSE_POOL]: controllers.setQsdmPulsePool,
+  [Endpoints.RUN_QSDM_PULSE_POOL_ACTION]: controllers.runQsdmPulsePoolAction,
+  [Endpoints.GET_QSDM_BOUNTY_LEDGER]: controllers.getQsdmBountyLedger,
   [Endpoints.GET_QSDM_MOTHER_HIVE_STATUS]: controllers.getQsdmMotherHiveStatus,
   [Endpoints.PAIR_QSDM_MOTHER_HIVE]: controllers.pairQsdmMotherHive,
   [Endpoints.DISCONNECT_QSDM_MOTHER_HIVE]: controllers.disconnectQsdmMotherHive,
@@ -78,6 +82,12 @@ const endpointToControllerMap: Record<
   [Endpoints.RESTORE_QSDM_SIGNER_WALLET]: controllers.restoreQsdmSignerWallet,
   [Endpoints.IMPORT_QSDM_SIGNER_WALLET]: controllers.importQsdmSignerWallet,
   [Endpoints.UNLOCK_QSDM_SIGNER_WALLET]: controllers.unlockQsdmSignerWallet,
+  [Endpoints.LIST_QSDM_WALLETS]: controllers.listQsdmWalletsController,
+  [Endpoints.ACTIVATE_QSDM_WALLET]: controllers.activateQsdmWalletController,
+  [Endpoints.RENAME_QSDM_WALLET]: controllers.renameQsdmWalletController,
+  [Endpoints.FORGET_QSDM_WALLET]: controllers.forgetQsdmWalletController,
+  [Endpoints.RECOVER_QSDM_WALLET]: controllers.recoverQsdmWalletController,
+  [Endpoints.GET_QSDM_WALLET_HISTORY]: controllers.getQsdmWalletHistory,
   [Endpoints.EXPORT_QSDM_SIGNER_WALLET_BACKUP]:
     controllers.exportQsdmSignerWalletBackup,
   [Endpoints.EXPORT_QSDM_SIGNER_RECOVERY_WORDS]:
@@ -126,6 +136,7 @@ const endpointToControllerMap: Record<
   [Endpoints.GET_HIVE_VERSION_POLICY]: controllers.getHiveVersionPolicy,
   [Endpoints.ARCHIVE_TASK]: controllers.archiveTask,
   [Endpoints.DOWNLOAD_APP_UPDATE]: controllers.downloadAppUpdate,
+  [Endpoints.RESTART_TO_UPDATE]: controllers.restartToUpdate,
   [Endpoints.CHECK_APP_UPDATE]: controllers.checkAppUpdate,
   [Endpoints.GET_PLATFORM]: controllers.getPlatform,
   [Endpoints.STORE_ALL_TIME_REWARDS]: controllers.storeAllTimeRewards,

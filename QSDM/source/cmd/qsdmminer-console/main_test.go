@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -60,6 +61,54 @@ func TestConfig_MalformedErrors(t *testing.T) {
 	}
 	if _, err := loadConfig(path); err == nil {
 		t.Error("expected malformed TOML to error")
+	}
+}
+
+// A miner.toml with lone CRs and CRLFs must load. Older QSDM Hive builds
+// wrote such files, and BurntSushi/toml v1.6 rejects a lone CR, so desktop
+// mining stopped with "TOML files cannot contain control characters".
+func TestConfig_AcceptsCRLineEndings(t *testing.T) {
+	want := Config{
+		ValidatorURL: "https://api.qsdm.tech",
+		RewardAddr:   "qsdm1abcdefg",
+		Protocol:     "v2",
+		NodeID:       "hive-pc-0123456789ab",
+	}
+	lines := []string{
+		"# QSDM miner config",
+		`validator_url = "https://api.qsdm.tech"`,
+		`reward_address = "qsdm1abcdefg"`,
+		`protocol = "v2"`,
+		`node_id = "hive-pc-0123456789ab"`,
+	}
+	cases := map[string]string{
+		"lone CR": strings.Join(lines, "\r") + "\r",
+		"CRLF":    strings.Join(lines, "\r\n") + "\r\n",
+		"mixed": lines[0] + "\r" + lines[1] + "\r\n" + lines[2] + "\r" +
+			lines[3] + "\r\n\r" + lines[4] + "\r",
+	}
+	for name, content := range cases {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "miner.toml")
+			if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			got, err := loadConfig(path)
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("loaded %+v, want %+v", got, want)
+			}
+		})
+	}
+}
+
+func TestNormalizeConfigLineEndings(t *testing.T) {
+	in := "a = 1\rb = 2\r\nc = 3\n\r\r\nd = 4"
+	want := "a = 1\nb = 2\nc = 3\n\n\nd = 4"
+	if got := string(normalizeConfigLineEndings([]byte(in))); got != want {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }
 

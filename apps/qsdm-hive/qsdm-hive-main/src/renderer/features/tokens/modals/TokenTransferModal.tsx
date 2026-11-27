@@ -35,6 +35,9 @@ import {
 import { KplTokenInput } from '../components/KplTokenInput/KplTokenInput';
 import { TokenItemType } from '../types';
 
+// The balance shown here is this address's; a CELL send names it so Hive refuses it after a wallet switch.
+const QSDM_WALLET_ADDRESS = /^[0-9a-f]{64}$/i;
+
 export type PropsType = {
   accountName: string;
   walletAddress: string;
@@ -77,7 +80,8 @@ export const TokenTransferModal = create<PropsType>(
           return transferCellFromMainWallet(
             accountName,
             amountAsCell,
-            trimmedWallet
+            trimmedWallet,
+            QSDM_WALLET_ADDRESS.test(walletAddress) ? walletAddress : undefined
           );
         }
         return transferCellFromStakingWallet(

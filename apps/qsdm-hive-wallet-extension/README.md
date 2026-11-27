@@ -21,20 +21,24 @@ Sites**. Signatures and CELL transfers always require a fresh Hive approval.
 There is no separate extension account, password, recovery phrase, or wallet
 import. This avoids creating another copy of the user's wallet secrets.
 
-The onboarding page offers the sign-in methods currently enabled by the HTTPS
-QSDM Account dashboard. Production currently uses **Telegram** with
-Authorization Code + PKCE and server-side ID-token verification. Email will use
-a short-lived one-time link instead of a reusable password once a production
-outbound sender is configured. The extension itself collects neither
-identifier and never embeds Telegram, SMTP, or account-service credentials.
-Google and Apple login are not included.
+**Sign in to QSDM Account** on the onboarding page opens
+`https://qsdm.tech/account/?login=wallet&source=extension`. The account page
+shows the sign-in methods QSDM Account has turned on. Today that is wallet
+sign-in: Hive shows the sign-in message and signs it after you approve.
+Email (a short-lived one-time link) and Telegram (Authorization Code + PKCE,
+ID token checked by the server) are built but turned off on qsdm.tech. The
+extension collects no email or Telegram identity and holds no Telegram, SMTP,
+or account-service credentials. Google and Apple login are not included.
 
-QSDM Account synchronizes verified identity and linked public wallet addresses.
-The extension opens the production providers exposed by QSDM Account. Telegram
-is the currently enabled sign-in method; email sign-in remains hidden until a
-production outbound email sender is configured.
+QSDM Account keeps a verified identity and linked public wallet addresses.
 It does not synchronize site approvals, private keys, keystores, passphrases,
 or recovery phrases. Those remain local to Hive.
+
+A message that names a website on an `Origin:` line (the QSDM Account sign-in
+and wallet-link messages do) is signed only for that website. When another
+site asks for it, the extension refuses it before any window (error code
+`4100`), and Hive refuses it too. A QSDM Account message without a website is
+refused the same way.
 
 ## Wallet dashboard
 

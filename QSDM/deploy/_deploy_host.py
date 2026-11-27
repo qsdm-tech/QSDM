@@ -15,6 +15,12 @@ Resolution order (highest priority first):
 
 The target accepts ``user@host``, ``user@host:port``, bracketed IPv6, or an
 ``ssh://`` URL. Invalid and ambiguous values fail before any network action.
+
+Host keys are pinned: the helpers accept only a server key listed in a
+known_hosts file (a script's ``--known-hosts`` argument, else
+``QSDM_SSH_KNOWN_HOSTS``, else ``~/.ssh/known_hosts``) and refuse unknown hosts.
+They never learn a key on first use, because they send root passwords and
+deploy secrets once connected.
 """
 from __future__ import annotations
 
@@ -270,3 +276,105 @@ def require_root_user(operation: str) -> None:
             f"but the resolved target is {resolved.display()}. Set the target user to root or use a "
             "separate sudo-aware deployment workflow."
         )
+
+
+def known_hosts_file(path: str | os.PathLike[str] | None = None) -> Path:
+    """Return the known_hosts file that pins the deploy host's SSH key.
+
+    Order: ``path`` (a script's ``--known-hosts`` argument), then
+    ``QSDM_SSH_KNOWN_HOSTS``, then ``~/.ssh/known_hosts``. The file must exist.
+    """
+    raw = os.fspath(path) if path else (_nonempty_env("QSDM_SSH_KNOWN_HOSTS") or str(Path.home() / ".ssh" / "known_hosts"))
+    resolved = Path(raw).expanduser()
+    if not resolved.is_file():
+        raise DeploymentTargetError(
+            f"No known_hosts file at {resolved}. Pin the host's SSH key first: connect once with ssh "
+            "and check the fingerprint, or run ssh-keyscan and check the fingerprint before saving it. "
+            "Then pass --known-hosts FILE or set QSDM_SSH_KNOWN_HOSTS."
+        )
+    return resolved
+
+
+def known_hosts_argument(argv: list[str]) -> tuple[str | None, list[str]]:
+    """Split ``--known-hosts FILE`` (or ``--known-hosts=FILE``) out of argv.
+
+    For the scripts that read their positional arguments themselves. Returns
+    the file (or None) and the remaining arguments in order.
+    """
+    value: str | None = None
+    rest: list[str] = []
+    args = iter(argv)
+    for arg in args:
+        if arg == "--known-hosts":
+            value = next(args, None)
+            if not value:
+                raise DeploymentTargetError("--known-hosts needs a file path.")
+        elif arg.startswith("--known-hosts="):
+            value = arg.split("=", 1)[1]
+            if not value:
+                raise DeploymentTargetError("--known-hosts needs a file path.")
+        else:
+            rest.append(arg)
+    return value, rest
+
+
+def host_key_name(host_name: str, port_number: int) -> str:
+    """Return the name known_hosts uses for a host ("[host]:port" off port 22)."""
+    return host_name if port_number == _DEFAULT_PORT else f"[{host_name}]:{port_number}"
+
+
+def pin_host_keys(client, known_hosts: str | os.PathLike[str] | None = None) -> Path:
+    """Make a paramiko SSHClient accept only host keys listed in known_hosts.
+
+    Unknown hosts are refused (RejectPolicy); a changed key fails in connect.
+    Returns the known_hosts file used.
+    """
+    import paramiko  # imported here so the resolver tests run without paramiko
+
+    path = known_hosts_file(known_hosts)
+    client.load_host_keys(str(path))
+    client.set_missing_host_key_policy(paramiko.RejectPolicy())
+    return path
+
+
+def start_pinned_transport(
+    transport,
+    host_name: str,
+    port_number: int,
+    known_hosts: str | os.PathLike[str] | None = None,
+    timeout: float | None = None,
+) -> Path:
+    """Start the SSH client side of a paramiko Transport with a pinned host key.
+
+    The server's key is checked against known_hosts before any credential is
+    sent. On an unknown host or a key that differs, the transport is closed and
+    DeploymentTargetError is raised. Returns the known_hosts file used.
+    """
+    import paramiko  # imported here so the resolver tests run without paramiko
+
+    path = known_hosts_file(known_hosts)
+    name = host_key_name(host_name, port_number)
+    keys = paramiko.HostKeys(str(path))
+    known = keys.lookup(name)
+    if known is None:
+        transport.close()
+        raise DeploymentTargetError(
+            f"{name} is not in {path}; refusing an unknown host. Pin its SSH key first."
+        )
+    # Ask for the key types the file lists first (an RSA key is checked through
+    # the rsa-sha2 algorithms), then the rest, as paramiko's SSHClient does.
+    preferred: list[str] = []
+    for key_type in known.keys():
+        names = ["rsa-sha2-512", "rsa-sha2-256", "ssh-rsa"] if key_type == "ssh-rsa" else [key_type]
+        preferred.extend(name for name in names if name not in preferred)
+    options = transport.get_security_options()
+    supported = list(options.key_types)
+    options.key_types = [k for k in preferred if k in supported] + [k for k in supported if k not in preferred]
+    transport.start_client(timeout=timeout)
+    if not keys.check(name, transport.get_remote_server_key()):
+        transport.close()
+        raise DeploymentTargetError(
+            f"The SSH host key of {name} does not match {path}. Refusing to connect: the host was "
+            "replaced or the connection is intercepted. Check the new key before you update the file."
+        )
+    return path

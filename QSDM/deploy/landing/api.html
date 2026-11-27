@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>QSDM public API reference — CELL chain, mining and wallet endpoints</title>
-  <meta name="description" content="Public, keyless QSDM HTTP API at https://api.qsdm.tech/api/v1: status, blocks, receipts, emission, miner enrollments, balances and nonces, with example URLs, cURL commands and sample responses." />
+  <meta name="description" content="Public, keyless QSDM HTTP API at https://api.qsdm.tech/api/v1: status, blocks, receipts, emission, miner enrollments, balances, nonces and address history, with example URLs, cURL commands and sample responses." />
   <link rel="canonical" href="https://qsdm.tech/api.html" />
   <meta name="theme-color" content="#061116" />
   <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
@@ -479,6 +479,62 @@
   &quot;next&quot;: 2
 }</pre>
           </article>
+          <article class="ep card" id="ep-wallet-history" aria-labelledby="ep-wallet-history-t">
+            <h3 id="ep-wallet-history-t"><span class="method">GET</span> <span class="mono">/wallet/history?address={address}&amp;limit={n}&amp;before={cursor}&amp;kind={kind}</span></h3>
+            <p>The transactions of an address, newest first, from the first block to the tip: what it sent, the transfers it received and the mining rewards paid to it. Served on <span class="mono">api.qsdm.tech</span> and <span class="mono">qsdm.tech</span> by a read-only history index that runs beside the chain; a node's own API does not have this route.</p>
+            <p><span class="mono">address</span>: 64 lowercase hex characters (required). <span class="mono">limit</span>: 1 to 200, default 50. <span class="mono">kind</span>: <span class="mono">all</span> (default), <span class="mono">transfers</span> (everything the address sent, and the wallet transfers it received) or <span class="mono">rewards</span> (mining rewards). <span class="mono">before</span>: the <span class="mono">next_before</span> of the previous page, for the next older page; <span class="mono">next_before</span> is <span class="mono">null</span> on the last page. A page never shifts when new blocks arrive.</p>
+            <p class="q-note">Each item's <span class="mono">kind</span> is <span class="mono">send</span>, <span class="mono">receive</span>, <span class="mono">reward</span> or <span class="mono">other</span>, seen from the queried address. <span class="mono">amount</span> and <span class="mono">fee</span> are CELL; <span class="mono">status</span> 1 means applied; <span class="mono">from</span> can be a system name such as <span class="mono">qsdm-system-funder</span> and <span class="mono">to</span> can be <span class="mono">null</span>. <span class="mono">indexed_tip</span> is the last block the index has read. Responses are never cached (<span class="mono">Cache-Control: no-store</span>) and carry no CORS headers: call it from your server, or from a page on qsdm.tech. Bad input gets <strong>HTTP 400</strong> with <span class="mono">{&quot;error&quot;:&quot;bad_request&quot;,&quot;message&quot;:…}</span>.</p>
+            <div class="ep-label">Example</div>
+            <div class="codeline"><code>https://api.qsdm.tech/api/v1/wallet/history?address=5d28b82565421e3666ef7a493e0d39fc89d3450009a32cbda72aa89c7cb820e7&amp;limit=2</code><button class="copy-btn" type="button" data-copy="https://api.qsdm.tech/api/v1/wallet/history?address=5d28b82565421e3666ef7a493e0d39fc89d3450009a32cbda72aa89c7cb820e7&amp;limit=2" aria-label="Copy URL for /wallet/history?address={address}">Copy URL</button><button class="copy-btn" type="button" data-copy="curl -s &#x27;https://api.qsdm.tech/api/v1/wallet/history?address=5d28b82565421e3666ef7a493e0d39fc89d3450009a32cbda72aa89c7cb820e7&amp;limit=2&#x27;" aria-label="Copy cURL for /wallet/history?address={address}">Copy cURL</button></div>
+            <div class="ep-label">Sample response <button class="run-btn" type="button" data-run="/wallet/history?address=5d28b82565421e3666ef7a493e0d39fc89d3450009a32cbda72aa89c7cb820e7&amp;limit=2" aria-controls="ep-wallet-history-out">Run live</button></div>
+            <pre class="sample" id="ep-wallet-history-out">{
+  &quot;address&quot;: &quot;5d28b82565421e3666ef7a493e0d39fc89d3450009a32cbda72aa89c7cb820e7&quot;,
+  &quot;indexed_tip&quot;: 1196849,
+  &quot;chain_tip&quot;: 1196849,
+  &quot;items&quot;: [
+    {
+      &quot;tx_id&quot;: &quot;solo-reward-560022-5d28b82565421e3666ef7a493e0d39fc89d3450009a32cbda72aa89c7cb820e7&quot;,
+      &quot;height&quot;: 327003,
+      &quot;time&quot;: &quot;2026-07-22T01:42:10.164648234Z&quot;,
+      &quot;kind&quot;: &quot;reward&quot;,
+      &quot;contract&quot;: &quot;qsdm/mining-reward/v1&quot;,
+      &quot;from&quot;: &quot;qsdm-system-funder&quot;,
+      &quot;to&quot;: &quot;5d28b82565421e3666ef7a493e0d39fc89d3450009a32cbda72aa89c7cb820e7&quot;,
+      &quot;amount&quot;: 0.021870612699386505,
+      &quot;fee&quot;: 0,
+      &quot;status&quot;: 1,
+      &quot;index&quot;: 0
+    },
+    {
+      &quot;tx_id&quot;: &quot;solo-reward-560013-5d28b82565421e3666ef7a493e0d39fc89d3450009a32cbda72aa89c7cb820e7&quot;,
+      &quot;height&quot;: 327002,
+      &quot;time&quot;: &quot;2026-07-22T01:42:00.1651182Z&quot;,
+      &quot;kind&quot;: &quot;reward&quot;,
+      &quot;contract&quot;: &quot;qsdm/mining-reward/v1&quot;,
+      &quot;from&quot;: &quot;qsdm-system-funder&quot;,
+      &quot;to&quot;: &quot;5d28b82565421e3666ef7a493e0d39fc89d3450009a32cbda72aa89c7cb820e7&quot;,
+      &quot;amount&quot;: 0.1876268352631579,
+      &quot;fee&quot;: 0,
+      &quot;status&quot;: 1,
+      &quot;index&quot;: 0
+    }
+  ],
+  &quot;next_before&quot;: &quot;MzI3MDAyLjMuMC40MzYzNzY&quot;
+}</pre>
+          </article>
+          <article class="ep card" id="ep-wallet-history-status" aria-labelledby="ep-wallet-history-status-t">
+            <h3 id="ep-wallet-history-status-t"><span class="method">GET</span> <span class="mono">/wallet/history/status</span></h3>
+            <p>How far the history index has read: <span class="mono">indexed_tip</span> (the last block it has read completely), <span class="mono">chain_tip</span>, <span class="mono">rows</span> (transaction logs indexed) and <span class="mono">behind</span> (blocks not read yet). While <span class="mono">behind</span> is above 0, the newest blocks are not in <span class="mono">/wallet/history</span> yet.</p>
+            <div class="ep-label">Example</div>
+            <div class="codeline"><code>https://api.qsdm.tech/api/v1/wallet/history/status</code><button class="copy-btn" type="button" data-copy="https://api.qsdm.tech/api/v1/wallet/history/status" aria-label="Copy URL for /wallet/history/status">Copy URL</button><button class="copy-btn" type="button" data-copy="curl -s &#x27;https://api.qsdm.tech/api/v1/wallet/history/status&#x27;" aria-label="Copy cURL for /wallet/history/status">Copy cURL</button></div>
+            <div class="ep-label">Sample response <button class="run-btn" type="button" data-run="/wallet/history/status" aria-controls="ep-wallet-history-status-out">Run live</button></div>
+            <pre class="sample" id="ep-wallet-history-status-out">{
+  &quot;indexed_tip&quot;: 1196849,
+  &quot;chain_tip&quot;: 1196849,
+  &quot;rows&quot;: 2008289,
+  &quot;behind&quot;: 0
+}</pre>
+          </article>
         </div>
       </div>
     </section>
@@ -708,7 +764,7 @@
         </article>
         <p class="q-note" style="margin-top:1rem">
           Retired in v0.3.3: <span class="mono">POST /api/v1/wallet/mint</span> returns <strong>HTTP 410 Gone</strong>.
-          Address-filtered transaction history, token and contract lists, and network topology require authentication and are not part of the public API.
+          Token and contract lists and network topology require authentication and are not part of the public API. The history of an address is public: <a href="#ep-wallet-history"><span class="mono">/wallet/history</span></a>.
         </p>
       </div>
     </section>

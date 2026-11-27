@@ -68,7 +68,42 @@ export type QsdmHiveReleaseManifest = {
   expires_at: string;
   key_id: string;
   artifacts: QsdmReleaseArtifact[];
+  // Optional: the oldest Hive version that may still mine and send CELL. The
+  // ML-DSA-87 signature covers the exact manifest bytes, so this field is
+  // signed like every other. Hive before 1.4.26 ignores it.
+  min_supported_version?: string;
+  // Optional: the share of Hives (0-100) that update on their own now; see
+  // hiveRollout.ts. Signed like every other field. Hive before 1.4.28
+  // ignores it.
+  rollout_percent?: number;
 };
+
+// The signed manifest's min_supported_version when it is a MAJOR.MINOR.PATCH
+// version not above the release version; otherwise undefined, and the policy
+// keeps requiring exactly the release version (as before 1.4.26).
+export function getQsdmHiveMinSupportedVersion(
+  manifest: Pick<QsdmHiveReleaseManifest, 'version' | 'min_supported_version'>
+): string | undefined {
+  const value = manifest.min_supported_version;
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || !/^\d+\.\d+\.\d+$/.test(value)) {
+    console.warn('Ignoring an invalid min_supported_version in the release.');
+    return undefined;
+  }
+  const minimum = value.split('.').map(Number);
+  const release = manifest.version.split('.').map(Number);
+  const aboveRelease =
+    minimum[0] !== release[0]
+      ? minimum[0] > release[0]
+      : minimum[1] !== release[1]
+      ? minimum[1] > release[1]
+      : minimum[2] > release[2];
+  if (aboveRelease) {
+    console.warn('Ignoring a min_supported_version above the release version.');
+    return undefined;
+  }
+  return value;
+}
 
 export type VerifiedQsdmHiveRelease = {
   manifest: QsdmHiveReleaseManifest;

@@ -20,6 +20,14 @@ import { SystemDbKeys } from 'config/systemDbKeys';
 import cryptoRandomString from 'crypto-random-string';
 import { Application } from 'express';
 import { get } from 'lodash';
+import { isQsdmMiningPlatform } from 'config/qsdmPlatformSupport';
+import {
+  getQsdmMinerSiblingConflictMessage,
+  getQsdmMinerSiblingTaskId,
+  isQsdmPoolMinerSystemTaskId,
+  QSDM_POOL_MINER_SYSTEM_TASK_ID,
+  qsdmTaskSendsSignedStopAction,
+} from 'config/qsdmSystemTasks';
 import getUserConfig from 'main/controllers/getUserConfig';
 import db from 'main/db';
 import { getK2NetworkUrl } from 'main/node/helpers/k2NetworkUrl';
@@ -31,8 +39,20 @@ import {
   describeQsdmMinerUnbondWindow,
   enrollQsdmMiner,
   getQsdmMinerEnrollmentStatus,
+  isQsdmNoNvidiaGpuPc,
   prepareQsdmMinerV2Config,
+  QSDM_NO_NVIDIA_GPU_MESSAGE,
 } from 'main/services/qsdmMinerEnrollment';
+import { setQsdmMinerTaskControls } from 'main/services/qsdmMinerEnrollmentWatch';
+import {
+  buildQsdmPoolJoinDetail,
+  planQsdmPoolMinerStart,
+  QsdmPoolMinerStartPlan,
+} from 'main/services/qsdmPoolMinerTask';
+import {
+  getQsdmPulsePoolStatus,
+  performQsdmPulseAction,
+} from 'main/services/qsdmPulsePool';
 import {
   assertQsdmMinerOperatorSigningReady,
   assertQsdmMotherHiveConfigured,
@@ -46,6 +66,8 @@ import {
   startQsdmMotherHiveSystemProcess,
   startQsdmSkyFangLinkSystemProcess,
   startOrAdoptQsdmMinerSystemProcess,
+  waitForPidExit,
+  writeQsdmSystemTaskLog,
 } from 'main/services/qsdmSystemTasks';
 import { getQsdmTaskStakeOwnership } from 'main/services/qsdmTaskStake';
 import { updateTaskCacheRecord } from 'main/services/tasks-cache-utils';
@@ -63,11 +85,14 @@ import {
   getMainSystemAccountKeypair,
   getStakingAccountKeypair,
 } from '../node/helpers';
-import { getAppDataPath } from '../node/helpers/getAppDataPath';
+import {
+  getTaskExecutablePath,
+  getTaskNamespacePath,
+} from '../node/helpers/taskPaths';
 import initExpressApp from '../node/initExpressApp';
 
 import getStakingAccountPublicKey from './getStakingAccountPubKey';
-import { getTaskSource } from './getTaskSource';
+import { loadTask } from './loadTask';
 import retryTask from './retryTask';
 import storeUserConfig from './storeUserConfig';
 import { getMyTaskStake } from './tasks';
@@ -130,6 +155,7 @@ const startTask = async (
   const isQsdmNativeTaskRuntime = QSDM_TASK_RUNTIME_MODE === 'qsdm-native';
   const isSystemTask = isQsdmSystemTask(taskAccountPubKey);
   const isSystemMinerTask = isQsdmMinerSystemTask(taskAccountPubKey);
+  const isSystemPoolMinerTask = isQsdmPoolMinerSystemTaskId(taskAccountPubKey);
   const isSystemEdgeWorkerTask = isQsdmEdgeWorkerSystemTask(taskAccountPubKey);
   const isSystemMotherHiveTask = isQsdmMotherHiveSystemTask(taskAccountPubKey);
   const isSystemSkyFangLinkTask =
@@ -178,6 +204,16 @@ const startTask = async (
       return;
     }
   }
+  if (isQsdmNativeTaskRuntime && isSystemMinerTask) {
+    const siblingTaskId = getQsdmMinerSiblingTaskId(taskAccountPubKey);
+    if (await qsdmHiveTasks.getIsTaskRunning(siblingTaskId)) {
+      return throwDetailedError({
+        detailed: getQsdmMinerSiblingConflictMessage(taskAccountPubKey),
+        type: ErrorType.TASK_START,
+      });
+    }
+  }
+
   const mainSystemAccount = await getMainSystemAccountKeypair();
 
   const taskInfo = await qsdmHiveTasks.getTaskState(taskAccountPubKey);
@@ -203,6 +239,14 @@ const startTask = async (
 
   if (isQsdmNativeTaskRuntime && isSystemMinerTask) {
     try {
+      // A PC without an NVIDIA GPU cannot mine: say so plainly before any
+      // wallet or enrollment step (macOS keeps its own message).
+      if (
+        isQsdmMiningPlatform(process.platform) &&
+        (await isQsdmNoNvidiaGpuPc())
+      ) {
+        throw new Error(QSDM_NO_NVIDIA_GPU_MESSAGE);
+      }
       // Public mining only accepts proofs signed by the enrollment owner's
       // wallet. Ask for an unlocked wallet before any enrollment prompt.
       assertQsdmMinerOperatorSigningReady();
@@ -257,6 +301,38 @@ const startTask = async (
           throw new Error('Miner enrollment did not become active.');
         }
       }
+    } catch (error: any) {
+      return throwDetailedError({
+        detailed: error?.message || error,
+        type: ErrorType.TASK_START,
+      });
+    }
+  }
+
+  let poolMinerPlan: QsdmPoolMinerStartPlan | null = null;
+  if (isQsdmNativeTaskRuntime && isSystemPoolMinerTask) {
+    try {
+      poolMinerPlan = await planQsdmPoolMinerStart({
+        getStatus: getQsdmPulsePoolStatus,
+        confirmJoin: async (prompt) => {
+          const answer = await dialog.showMessageBox({
+            type: 'question',
+            title: 'Join the QSDM pool?',
+            message: 'Mine with the QSDM pool and get paid every block.',
+            detail: buildQsdmPoolJoinDetail(prompt),
+            buttons: ['Join the pool', 'Cancel'],
+            defaultId: 0,
+            cancelId: 1,
+            noLink: true,
+          });
+          return answer.response === 0;
+        },
+        join: () => performQsdmPulseAction({ op: 'join' }),
+      });
+      writeQsdmSystemTaskLog(
+        QSDM_POOL_MINER_SYSTEM_TASK_ID,
+        poolMinerPlan.message
+      );
     } catch (error: any) {
       return throwDetailedError({
         detailed: error?.message || error,
@@ -360,7 +436,14 @@ const startTask = async (
         ? startQsdmMotherHiveSystemProcess()
         : isSystemSkyFangLinkTask
         ? startQsdmSkyFangLinkSystemProcess(taskInfo)
-        : await startOrAdoptQsdmMinerSystemProcess();
+        : await startOrAdoptQsdmMinerSystemProcess(
+            poolMinerPlan
+              ? {
+                  pulse: poolMinerPlan.pulse,
+                  mirrorLogTo: QSDM_POOL_MINER_SYSTEM_TASK_ID,
+                }
+              : { pulse: 'settings', mirrorLogTo: null }
+          );
 
       child.once('exit', async (code, signal) => {
         console.error(
@@ -436,6 +519,7 @@ const startTask = async (
     console.error('ERROR STARTING TASK', err);
     if (
       isQsdmNativeTaskRuntime &&
+      qsdmTaskSendsSignedStopAction(taskAccountPubKey) &&
       (qsdmStartActionAccepted || (isSystemTask && isTaskRunning))
     ) {
       try {
@@ -457,6 +541,24 @@ const startTask = async (
     });
   }
 };
+
+// The miner enrollment watch stops a miner task, or restarts it after it
+// enrolled again, through the same start path as the Start button. The old
+// miner process must be gone first, or the start would adopt it. A task the
+// user stopped meanwhile stays stopped.
+setQsdmMinerTaskControls({
+  stop: async (taskId) => {
+    if (!qsdmHiveTasks.RUNNING_TASKS[taskId]) return;
+    await qsdmHiveTasks.stopTask(taskId);
+  },
+  restart: async (taskId) => {
+    const runtime = qsdmHiveTasks.RUNNING_TASKS[taskId];
+    if (!runtime) return;
+    await qsdmHiveTasks.stopTask(taskId);
+    if (runtime.child.pid) await waitForPidExit(runtime.child.pid);
+    await startTask({} as Event, { taskAccountPubKey: taskId });
+  },
+});
 
 export async function clearTaskRetryTimeout(taskPubkey: string) {
   const allTaskRetryData: {
@@ -481,75 +583,6 @@ export async function clearTaskRetryTimeout(taskPubkey: string) {
 }
 
 /**
- * Load tasks and generate task executables
- * @param {any[]} selectedTasks Array of selected tasks
- * @param {any} expressApp
- * @returns {any[]} Array of executable tasks
- */
-// bafybeiabhpqrknrzz5fka2otptaw7lubz7awh5f7n2kruk52akq4jr5dh4
-export async function loadTask({
-  taskAuditProgram,
-  taskId,
-}: {
-  taskAuditProgram: string;
-  taskId: string;
-}) {
-  const executablesDirectoryPath = `${getAppDataPath()}/executables`;
-  const presumedSourceCodePath = `${executablesDirectoryPath}/${taskAuditProgram}.js`;
-  let shouldDownloadExecutable = !fsSync.existsSync(presumedSourceCodePath);
-
-  if (!shouldDownloadExecutable) {
-    const fileContent = fsSync.readFileSync(presumedSourceCodePath, 'utf8');
-    shouldDownloadExecutable = fileContent.startsWith('<');
-  }
-
-  /**
-   * 1.  start node
-   * 2. Check the executable folders, and there is a file with task_audit_prgram name
-   * 3. If task with this task_audit_prgram is not hashed, force download and alternate malicious executable code
-   */
-
-  if (shouldDownloadExecutable) {
-    const sourceCode: string = await getTaskSource({} as Event, {
-      taskAuditProgram,
-    });
-    /**
-     * @dev save record in task_id -> taskAuditProgram map in db fpr the first time when task is loaded
-     * it will be used for tracking the task and its executable
-     */
-    await saveTaskAuditProgramIdToTaskIdMap(taskId, taskAuditProgram);
-    fsSync.mkdirSync(executablesDirectoryPath, { recursive: true });
-    fsSync.writeFileSync(presumedSourceCodePath, sourceCode);
-  }
-}
-
-async function saveTaskAuditProgramIdToTaskIdMap(
-  taskId: string,
-  taskAuditProgram: string
-) {
-  let currentMap: Record<string, string>;
-
-  try {
-    const currentMapString = await db.get(
-      SystemDbKeys.TaskIdToAuditProgramIdMap
-    );
-    currentMap = JSON.parse(currentMapString as string) as Record<
-      string,
-      string
-    >;
-  } catch (error) {
-    currentMap = {};
-  }
-
-  currentMap[taskAuditProgram] = taskId;
-
-  await db.put(
-    SystemDbKeys.TaskIdToAuditProgramIdMap,
-    JSON.stringify(currentMap)
-  );
-}
-
-/**
  * Initializes and executes tasks
  * @param {any[]} selectedTask Array of selected tasks
  * @param {any[]} executableTasks Array of executable tasks
@@ -568,6 +601,12 @@ export async function executeTasks(
   expressAppPort: number;
   secret: string;
 }> {
+  // Both names come from the task data: refuse anything but a plain name
+  // before a folder is made or a process is started.
+  const taskNamespacePath = getTaskNamespacePath(selectedTask.task_id);
+  const taskExecutablePath = getTaskExecutablePath(
+    selectedTask.task_audit_program
+  );
   const availablePort = await detectPort();
 
   const secret = cryptoRandomString({ length: 20 });
@@ -585,7 +624,7 @@ export async function executeTasks(
       ? getQsdmTaskActionSender() || 'qsdm'
       : await getStakingAccountPublicKey();
   const STAKE = selectedTask.stake_list[stakingAccPubkey];
-  fsSync.mkdirSync(`${getAppDataPath()}/namespace/${selectedTask.task_id}`, {
+  fsSync.mkdirSync(taskNamespacePath, {
     recursive: true,
   });
   let logFile;
@@ -593,7 +632,7 @@ export async function executeTasks(
     logFile = rfs.createStream('task.log', {
       size: '5M', // Maximum file size
       compress: 'gzip', // Compress rotated files using gzip
-      path: `${getAppDataPath()}/namespace/${selectedTask.task_id}`, // Directory path for log files
+      path: taskNamespacePath, // Directory path for log files
     });
 
     // Event listener for the rotation event
@@ -616,7 +655,7 @@ export async function executeTasks(
     console.error('ERROR IN TASK LOG', error);
   }
   const childTaskProcess = fork(
-    `${getAppDataPath()}/executables/${selectedTask.task_audit_program}.js`,
+    taskExecutablePath,
     [
       `${selectedTask.task_name}`,
       `${selectedTask.task_id}`,

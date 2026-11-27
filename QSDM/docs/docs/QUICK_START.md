@@ -22,7 +22,7 @@ a wallet and choose a strong passphrase. Your ML-DSA-87 key is generated and
 encrypted on your device. Download the encrypted backup and keep it safe.
 More: [Web wallet](WEB_WALLET.md).
 
-**On the desktop:** install QSDM Hive 1.4.23 for Windows or Linux from the
+**On the desktop:** install QSDM Hive 1.4.27 for Windows or Linux from the
 [download page](https://qsdm.tech/download.html), check the file hash
 ([how](DOWNLOADS_AND_VERIFICATION.md)), then open **Settings → Wallet → Create
 New Wallet** and write down the 24 recovery words.
@@ -60,5 +60,5 @@ has not had an independent external audit. Read the
 ## Building the node from source
 
 Developers who want to build and run the Go node locally should start with the
-repository [README](https://github.com/blackbeardONE/QSDM/blob/main/QSDM/README.md)
+repository [README](https://github.com/qsdm-tech/QSDM/blob/main/QSDM/README.md)
 and the [Operator guide](OPERATOR_GUIDE.md).

@@ -4,7 +4,7 @@ import * as fsSync from 'fs';
 import { LAMPORTS_PER_SOL } from 'vendor/qsdm-chain/web3';
 import axios, { AxiosError } from 'axios';
 import { SERVER_URL } from 'config/server';
-import { getAppDataPath } from 'main/node/helpers/getAppDataPath';
+import { getTaskNamespacePath } from 'main/node/helpers/taskPaths';
 import { TaskToMigrate } from 'models';
 
 import delegateStake from '../delegateStake';
@@ -187,7 +187,7 @@ const setUpNewTaskAsStarted = async ({
     });
   }
 
-  fsSync.mkdirSync(`${getAppDataPath()}/namespace/${taskPublicKey}`, {
+  fsSync.mkdirSync(getTaskNamespacePath(taskPublicKey), {
     recursive: true,
   });
 };

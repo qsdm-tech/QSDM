@@ -33,7 +33,9 @@ Run
 
 Idempotent: re-running overwrites ngc.env and re-registers the unit.
 
-Requires paramiko and an ed25519 key authorised on the target.
+Requires paramiko and an ed25519 key authorised on the target. The target's
+SSH host key must already be in known_hosts (--known-hosts FILE, else
+QSDM_SSH_KNOWN_HOSTS, else ~/.ssh/known_hosts); unknown hosts are refused.
 """
 from __future__ import annotations
 import argparse
@@ -43,7 +45,7 @@ import sys
 
 import paramiko
 
-from _deploy_host import DeploymentTargetError, ngc_proof_ingest_url, public_api_base
+from _deploy_host import DeploymentTargetError, ngc_proof_ingest_url, pin_host_keys, public_api_base
 
 
 LOCAL_SIDECAR = "apps/qsdm-nvidia-ngc/validator_phase1.py"
@@ -115,6 +117,9 @@ def main() -> int:
     p.add_argument("--host", required=True, help="Target IP or DNS of the second attestation box.")
     p.add_argument("--user", default="ubuntu", help="SSH login user (default: ubuntu).")
     p.add_argument("--key", default=os.path.expanduser("~/.ssh/id_ed25519"))
+    p.add_argument("--known-hosts",
+                   help="known_hosts file that pins the target's SSH key (default: QSDM_SSH_KNOWN_HOSTS, "
+                        "then ~/.ssh/known_hosts). Unknown hosts are refused.")
     p.add_argument("--node-id", required=True,
                    help="Free-form QSDM_NGC_PROOF_NODE_ID. MUST differ from every other sidecar.")
     p.add_argument("--region-label",
@@ -149,7 +154,10 @@ def main() -> int:
 
     key = paramiko.Ed25519Key.from_private_key_file(args.key)
     c = paramiko.SSHClient()
-    c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    try:
+        pin_host_keys(c, args.known_hosts)
+    except DeploymentTargetError as exc:
+        p.error(str(exc))
     c.connect(args.host, username=args.user, pkey=key, timeout=20, banner_timeout=20)
 
     try:

@@ -82,6 +82,10 @@ The account service accepts a wallet link only when the submitted public key
 derives the claimed QSDM address and its ML-DSA signature verifies over the
 exact one-time challenge. One public wallet cannot be attached to two accounts.
 Likewise, one email or Telegram identity cannot be attached to two accounts.
+The sign-in and wallet-link messages name the account website on an `Origin:`
+line. From Hive 1.4.28 and extension 0.6.1, QSDM Hive and the QSDM Wallet
+extension sign such a message only when that website is the one asking, so
+another site cannot use a QSDM Account message to sign in as you.
 The active-wallet transfer panel does not change this boundary: it calls the
 local browser provider, and no signing authority is stored in the account
 service or browser session.

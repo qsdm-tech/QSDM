@@ -22,6 +22,11 @@ import type {
   QsdmVirtualComputeCancelRequest,
   QsdmVirtualComputeSubmitRequest,
   QsdmWalletProviderRevokeRequest,
+  QsdmWalletActivateRequest,
+  QsdmWalletForgetRequest,
+  QsdmWalletHistoryRequest,
+  QsdmWalletRecoverRequest,
+  QsdmWalletRenameRequest,
 } from 'models/api/qsdm';
 
 /** Utils */
@@ -144,6 +149,26 @@ export const getQsdmMinerRewardStatus = async () => {
   return window.main.getQsdmMinerRewardStatus();
 };
 
+export const getQsdmPulsePool = async () => {
+  return window.main.getQsdmPulsePool();
+};
+
+export const setQsdmPulsePool = async (
+  payload: Parameters<typeof window.main.setQsdmPulsePool>[0]
+) => {
+  return window.main.setQsdmPulsePool(payload);
+};
+
+export const runQsdmPulsePoolAction = async (
+  op: 'join' | 'leave' | 'reclaim'
+) => {
+  return window.main.runQsdmPulsePoolAction({ op });
+};
+
+export const getQsdmBountyLedger = async () => {
+  return window.main.getQsdmBountyLedger();
+};
+
 export const getQsdmMotherHiveStatus = async () => {
   return window.main.getQsdmMotherHiveStatus();
 };
@@ -200,6 +225,34 @@ export const enableQsdmSignerLegacyRecovery = async (
   payload: QsdmSignerLegacyRecoveryEnableRequest
 ) => {
   return window.main.enableQsdmSignerLegacyRecovery(payload);
+};
+
+export const listQsdmWallets = async () => {
+  return window.main.listQsdmWallets();
+};
+
+export const activateQsdmWallet = async (
+  payload: QsdmWalletActivateRequest
+) => {
+  return window.main.activateQsdmWallet(payload);
+};
+
+export const renameQsdmWallet = async (payload: QsdmWalletRenameRequest) => {
+  return window.main.renameQsdmWallet(payload);
+};
+
+export const forgetQsdmWallet = async (payload: QsdmWalletForgetRequest) => {
+  return window.main.forgetQsdmWallet(payload);
+};
+
+export const recoverQsdmWallet = async (payload: QsdmWalletRecoverRequest) => {
+  return window.main.recoverQsdmWallet(payload);
+};
+
+export const getQsdmWalletHistory = async (
+  payload: QsdmWalletHistoryRequest
+) => {
+  return window.main.getQsdmWalletHistory(payload);
 };
 
 export const importQsdmSignerWallet = async (

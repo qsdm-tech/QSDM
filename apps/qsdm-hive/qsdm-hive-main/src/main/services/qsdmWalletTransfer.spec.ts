@@ -8,6 +8,7 @@ import { setQsdmRuntimeCoreApiUrl } from 'config/qsdm';
 
 import { assertQsdmCanonicalChainSafety } from './qsdmCanonicalChain';
 import { fetchQsdmPoEParents } from './qsdmPoEParents';
+import { recordQsdmWalletSend } from './qsdmWalletHistory';
 import { submitQsdmWalletTransferIntent } from './qsdmWalletTransfer';
 
 jest.mock('axios', () => ({
@@ -27,6 +28,10 @@ jest.mock('./qsdmCanonicalChain', () => ({
 jest.mock('./qsdmPoEParents', () => ({
   ...jest.requireActual('./qsdmPoEParents'),
   fetchQsdmPoEParents: jest.fn(),
+}));
+
+jest.mock('./qsdmWalletHistory', () => ({
+  recordQsdmWalletSend: jest.fn(),
 }));
 
 const mockedAxiosGet = axios.get as jest.Mock;
@@ -443,5 +448,187 @@ describe('qsdmWalletTransfer', () => {
       'http://127.0.0.1:8080/api/v1/wallet/submit-signed'
     );
     setQsdmRuntimeCoreApiUrl();
+  });
+});
+
+describe('qsdmWalletTransfer after a wallet switch', () => {
+  const walletA = 'a'.repeat(64);
+  const walletB = 'b'.repeat(64);
+  const recipient = 'c'.repeat(64);
+  const changedMessage =
+    'The active wallet changed. Check the amount and send again.';
+  type TransferRequest = Parameters<typeof submitQsdmWalletTransferIntent>[0];
+  // What the Settings switch does to the signer (activateQsdmImportedSignerPaths).
+  const makeActive = (address: string) => {
+    process.env.QSDM_TASK_ACTION_SENDER = address;
+    process.env.QSDM_TASK_ACTION_KEYSTORE_PATH = `/hive-signer/wallets/${address.slice(
+      0,
+      4
+    )}/wallet.json`;
+    process.env.QSDM_TASK_ACTION_PASSPHRASE_FILE = `/session/${address.slice(
+      0,
+      4
+    )}/passphrase.txt`;
+  };
+  const nextNonceBySender: Record<string, number> = {
+    [walletA]: 41,
+    [walletB]: 3,
+  };
+  const nonceFor = (url: string) => {
+    const sender = new URL(url).searchParams.get('sender') || '';
+    return {
+      data: {
+        sender,
+        nonce: nextNonceBySender[sender] - 1,
+        next: nextNonceBySender[sender],
+      },
+    };
+  };
+
+  beforeEach(() => {
+    process.env = {
+      ...originalEnv,
+      QSDM_TASK_ACTION_SIGNER: 'cli',
+      QSDM_TASK_ACTION_CLI_PATH: 'qsdmcli',
+    };
+    makeActive(walletA);
+    mockedAxiosGet.mockReset();
+    mockedAxiosPost.mockReset();
+    mockedSpawn.mockReset();
+    mockedSafety.mockReset().mockResolvedValue(safeReport);
+    mockedParents.mockReset().mockResolvedValue(committedParents);
+    setQsdmRuntimeCoreApiUrl();
+  });
+
+  afterAll(() => {
+    process.env = originalEnv;
+  });
+
+  it("signs a send after the switch with B's wallet file and B's nonce", async () => {
+    const unsignedEnvelopes = mockCliSigner();
+    mockedAxiosGet.mockImplementation(async (url: string) => nonceFor(url));
+    mockedAxiosPost.mockResolvedValue(acceptedResponse());
+
+    makeActive(walletB);
+    await expect(
+      submitQsdmWalletTransferIntent({
+        recipient,
+        amount: 2,
+        expectedSender: walletB,
+      } as TransferRequest)
+    ).resolves.toMatchObject({ status: 'accepted' });
+
+    expect(mockedAxiosGet).toHaveBeenCalledTimes(1);
+    expect(mockedAxiosGet.mock.calls[0][0]).toContain(`sender=${walletB}`);
+    expect(unsignedEnvelopes).toHaveLength(1);
+    expect(unsignedEnvelopes[0]).toMatchObject({
+      sender: walletB,
+      nonce: 3,
+      amount: 2,
+    });
+    expect(mockedSpawn.mock.calls[0][1]).toEqual(
+      expect.arrayContaining([
+        '--in',
+        '/hive-signer/wallets/bbbb/wallet.json',
+        '--passphrase-file',
+        '/session/bbbb/passphrase.txt',
+      ])
+    );
+  });
+
+  it('refuses a send for the wallet the screen showed before the switch', async () => {
+    mockCliSigner();
+    mockedAxiosGet.mockImplementation(async (url: string) => nonceFor(url));
+
+    makeActive(walletB);
+    await expect(
+      submitQsdmWalletTransferIntent({
+        recipient,
+        amount: 2,
+        expectedSender: walletA,
+      } as TransferRequest)
+    ).rejects.toThrow(changedMessage);
+    expect(mockedAxiosGet).not.toHaveBeenCalled();
+    expect(mockedSpawn).not.toHaveBeenCalled();
+    expect(mockedAxiosPost).not.toHaveBeenCalled();
+  });
+
+  it('never signs a transfer built for A with the keystore of a wallet that became active meanwhile', async () => {
+    mockCliSigner();
+    mockedAxiosGet.mockImplementation(async (url: string) => {
+      // The active wallet changes while Hive reads A's nonce.
+      makeActive(walletB);
+      return nonceFor(url);
+    });
+    mockedAxiosPost.mockResolvedValue(acceptedResponse());
+
+    await expect(
+      submitQsdmWalletTransferIntent({
+        recipient,
+        amount: 2,
+        expectedSender: walletA,
+      } as TransferRequest)
+    ).rejects.toThrow(changedMessage);
+    expect(mockedSpawn).not.toHaveBeenCalled();
+    expect(mockedAxiosPost).not.toHaveBeenCalled();
+  });
+
+  it("keeps the accepted send in the sending wallet's Recent transactions", async () => {
+    const record = recordQsdmWalletSend as jest.Mock;
+    record.mockReset();
+    mockCliSigner();
+    mockedAxiosGet.mockImplementation(async (url: string) => nonceFor(url));
+    mockedAxiosPost.mockResolvedValue(acceptedResponse('tx-from-b'));
+
+    makeActive(walletB);
+    await submitQsdmWalletTransferIntent({
+      recipient,
+      amount: 2.5,
+      expectedSender: walletB,
+    } as TransferRequest);
+    expect(record).toHaveBeenCalledTimes(1);
+    expect(record).toHaveBeenCalledWith(walletB, {
+      txId: 'tx-from-b',
+      to: recipient,
+      amount: 2.5,
+      fee: 0,
+      time: expect.any(String),
+    });
+
+    // A send whose record cannot be written is still sent.
+    record.mockImplementationOnce(() => {
+      throw new Error('disk full');
+    });
+    await expect(
+      submitQsdmWalletTransferIntent({ recipient, amount: 1 })
+    ).resolves.toMatchObject({ status: 'accepted' });
+    expect(mockedAxiosPost).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports a send as in progress until it settles', async () => {
+    const transfer = jest.requireActual('./qsdmWalletTransfer') as {
+      isQsdmWalletTransferInProgress?: () => boolean;
+    };
+    mockCliSigner();
+    mockedAxiosGet.mockImplementation(async (url: string) => nonceFor(url));
+    let accept: ((value: unknown) => void) | undefined;
+    mockedAxiosPost.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          accept = resolve;
+        })
+    );
+
+    expect(transfer.isQsdmWalletTransferInProgress?.()).toBe(false);
+    const sending = submitQsdmWalletTransferIntent({ recipient, amount: 1 });
+    expect(transfer.isQsdmWalletTransferInProgress?.()).toBe(true);
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(mockedAxiosPost).toHaveBeenCalledTimes(1);
+    expect(transfer.isQsdmWalletTransferInProgress?.()).toBe(true);
+    accept?.(acceptedResponse());
+    await sending;
+    expect(transfer.isQsdmWalletTransferInProgress?.()).toBe(false);
   });
 });

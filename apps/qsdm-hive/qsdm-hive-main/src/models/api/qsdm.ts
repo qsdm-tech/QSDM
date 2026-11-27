@@ -1,4 +1,5 @@
 import type { QsdmCoreConnectionMode } from '../../config/qsdm';
+import type { QsdmBountyLedger } from '../../utils/qsdmBountyLedger';
 import type { RawTaskData } from '../task';
 
 export type QsdmCanonicalChainState =
@@ -132,10 +133,110 @@ export interface QsdmTaskActionSignerStatus {
 export interface QsdmSignerWalletImportRequest {
   keystoreJson: string;
   passphrase: string;
+  // Since 1.4.25 an import adds the wallet; it becomes active only when Hive has no wallet yet or makeActive is true.
+  label?: string;
+  makeActive?: boolean;
 }
 
 export interface QsdmSignerWalletCreateRequest {
   passphrase: string;
+  label?: string;
+  makeActive?: boolean;
+}
+
+export type QsdmStoredWalletSource =
+  | 'created'
+  | 'imported'
+  | 'restored'
+  | 'migrated'
+  | 'recovered';
+
+export interface QsdmStoredWallet {
+  address: string;
+  label: string;
+  addedAt: string;
+  source: QsdmStoredWalletSource;
+}
+
+export interface QsdmRecoverableWallet {
+  address: string;
+  backupFile: string;
+  backedUpAt: string;
+  hasPassphraseBackup: boolean;
+}
+
+export interface QsdmWalletListResponse {
+  active: string;
+  wallets: QsdmStoredWallet[];
+  recoverable: QsdmRecoverableWallet[];
+  minerRunning: boolean;
+}
+
+export interface QsdmWalletActivateRequest {
+  address: string;
+}
+
+export interface QsdmWalletActivateResponse {
+  address: string;
+  unlocked: boolean;
+}
+
+export interface QsdmWalletRenameRequest {
+  address: string;
+  label: string;
+}
+
+export interface QsdmWalletForgetRequest {
+  address: string;
+  confirmAddress: string;
+}
+
+export interface QsdmWalletRecoverRequest {
+  backupFile: string;
+  label?: string;
+}
+
+/** Recent transactions: transfers (sent and received) or mining rewards. */
+export type QsdmWalletHistoryKind = 'transfers' | 'rewards';
+
+export type QsdmWalletHistoryStatus = 'pending' | 'confirmed' | 'failed';
+
+export interface QsdmWalletHistoryItem {
+  txId: string;
+  /** The log index inside the transaction (network history only). */
+  index?: number;
+  /** ISO-8601 time. */
+  time: string;
+  type: 'sent' | 'received' | 'reward' | 'other';
+  /** The other address: the recipient of a send, the sender of a receive. */
+  counterparty?: string;
+  /** CELL, never negative; outgoing gives the sign. */
+  amount: number;
+  outgoing: boolean;
+  fee?: number;
+  status: QsdmWalletHistoryStatus;
+  height?: number;
+  /** local: Hive's own record of a send it made, until the network history has it. */
+  source: 'chain' | 'local';
+}
+
+export interface QsdmWalletHistoryRequest {
+  address: string;
+  kind?: QsdmWalletHistoryKind;
+  /** The cursor of the next older page (nextBefore of the previous page). */
+  before?: string;
+  limit?: number;
+}
+
+export interface QsdmWalletHistoryResponse {
+  address: string;
+  kind: QsdmWalletHistoryKind;
+  /** false when the network history did not answer (not live yet, or unreachable). */
+  available: boolean;
+  items: QsdmWalletHistoryItem[];
+  nextBefore: string | null;
+  /** Hive's own sends from this wallet, newest first (first page of the transfers only). */
+  localSends?: QsdmWalletHistoryItem[];
 }
 
 export interface QsdmSignerWalletUnlockRequest {
@@ -148,12 +249,16 @@ export interface QsdmSignerWalletImportResponse {
   keystorePath: string;
   passphraseFile: string;
   recoveryWords?: string;
+  // false: added to the wallet list, the previous wallet stays active
+  active?: boolean;
 }
 
 export interface QsdmSignerWalletRecoveryRequest {
   recoveryWords: string;
   passphrase: string;
   recoveryType?: 'native' | 'legacy';
+  label?: string;
+  makeActive?: boolean;
 }
 
 export interface QsdmSignerLegacyRecoveryEnableRequest {
@@ -265,6 +370,8 @@ export interface QsdmMinerRewardStatusResponse {
     gpuComputeActive?: boolean;
     tensorCoreForkActive?: boolean;
     tensorCoreForkHeight?: number;
+    /** This PC has no NVIDIA GPU, so it cannot mine. */
+    noNvidiaGpu?: boolean;
     error?: string;
     gpu?: {
       uuid: string;
@@ -819,4 +926,64 @@ export interface QsdmTaskResponse {
   catalog_source?: string;
   catalog_state_root?: string;
   task: RawTaskData;
+}
+
+// PULSE, the non-custodial mining pool (main/services/qsdmPulsePool.ts).
+export interface QsdmPulsePoolSettings {
+  enabled: boolean;
+  poolUrl: string;
+  backupUrl: string;
+  fallbackMinutes: number;
+  worker: string;
+}
+
+export interface QsdmPulseReceiptSummary {
+  index?: number;
+  difficulty?: number;
+  at_unix_ms?: number;
+  job_id?: string;
+}
+
+export interface QsdmPulsePoolStatus {
+  settings: QsdmPulsePoolSettings;
+  address: string;
+  checkedAt: string;
+  poolAnswering?: string;
+  poolId?: string;
+  poolMode?: string;
+  poolNote?: string;
+  feeBps?: number;
+  feeTo?: string;
+  networkFeeCapBps?: number;
+  payoutFloorCell?: number;
+  poolStats?: Record<string, unknown>;
+  poolError?: string;
+  member?: boolean;
+  memberPool?: string;
+  ruleActive?: boolean;
+  activationHeight?: number;
+  reclaimAfterBlocks?: number;
+  tip?: number;
+  escrowedCell?: number;
+  owedCell?: number;
+  reclaimableProofs?: string[];
+  chainError?: string;
+  receiptsTotal: number;
+  // Receipts the pool signed today (this computer's local day).
+  receiptsToday?: number;
+  recentReceipts: QsdmPulseReceiptSummary[];
+}
+
+export interface QsdmPulseActionResult {
+  tx_id?: string;
+  status?: string;
+  nonce: number;
+}
+
+export interface QsdmBountyLedgerStatus {
+  /** The last good ledger: live, or the cached copy when qsdm.tech did not answer. */
+  ledger: QsdmBountyLedger | null;
+  source: 'live' | 'cache' | 'none';
+  error?: string;
+  checkedAt: string;
 }

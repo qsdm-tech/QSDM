@@ -1,4 +1,5 @@
 import { Event } from 'electron';
+import path from 'path';
 
 import * as readLastLines from 'read-last-lines';
 
@@ -6,7 +7,7 @@ import { ErrorType } from 'models';
 import { GetTaskLogsParam, GetTaskLogsResponse } from 'models/api';
 import { throwDetailedError } from 'utils';
 
-import { getAppDataPath } from '../node/helpers/getAppDataPath';
+import { getTaskNamespacePath } from '../node/helpers/taskPaths';
 
 const getTaskLogs = async (
   event: Event,
@@ -16,7 +17,7 @@ const getTaskLogs = async (
 
   try {
     const contents = await readLastLines.read(
-      `${getAppDataPath()}/namespace/${taskAccountPubKey}/task.log`,
+      path.join(getTaskNamespacePath(taskAccountPubKey), 'task.log'),
       noOfLines
     );
     return contents;

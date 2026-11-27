@@ -14,7 +14,13 @@ import {
   QSDM_CORE_CELL_DECIMALS,
   QSDM_GATEWAY_API_URL,
 } from 'config/qsdm';
+import { QSDM_MINER_SYSTEM_TASK_ID } from 'config/qsdmSystemTasks';
+import { getAppDataPath } from 'main/node/helpers/getAppDataPath';
 import { assertQsdmCanonicalChainSafety } from 'main/services/qsdmCanonicalChain';
+import {
+  setQsdmMinerConfigStringValue,
+  writeQsdmMinerConfigFile,
+} from 'main/services/qsdmMinerConfigFile';
 import {
   getQsdmTaskActionCliPath,
   getQsdmTaskActionKeystorePath,
@@ -164,8 +170,29 @@ export type QsdmMinerEnrollmentStatus = {
   gpuComputeActive?: boolean;
   tensorCoreForkActive?: boolean;
   tensorCoreForkHeight?: number;
+  // This PC has no NVIDIA GPU (QSDM_NO_NVIDIA_GPU_MESSAGE), so it cannot mine.
+  noNvidiaGpu?: boolean;
   error?: string;
 };
+
+export const QSDM_NO_NVIDIA_GPU_MESSAGE =
+  'This PC has no NVIDIA GPU. QSDM mining needs one.';
+
+export const isQsdmNoNvidiaGpuError = (error: unknown) =>
+  (error as { message?: unknown } | null | undefined)?.message ===
+  QSDM_NO_NVIDIA_GPU_MESSAGE;
+
+// nvidia-smi comes with the NVIDIA driver. Missing (ENOENT), or listing no
+// GPU, means this PC has no NVIDIA GPU. A driver that fails ("couldn't
+// communicate with the NVIDIA driver") is not this case: it keeps its own
+// message, as does a GPU older than Turing.
+export const isQsdmNoNvidiaGpuProbeResult = (
+  error: { code?: unknown } | null | undefined,
+  output: string
+) =>
+  error?.code === 'ENOENT' ||
+  /no devices were found/i.test(output) ||
+  (!error && !output.trim());
 
 const execFileText = (command: string, args: string[], timeout = 7000) =>
   new Promise<string>((resolve, reject) => {
@@ -173,9 +200,15 @@ const execFileText = (command: string, args: string[], timeout = 7000) =>
       command,
       args,
       { windowsHide: true, timeout, maxBuffer: 1024 * 1024 },
-      (error, stdout) => {
+      (error, stdout, stderr) => {
         if (error) {
-          reject(error);
+          // Keep what the program printed: nvidia-smi reports "No devices
+          // were found" in its output with a failing exit code.
+          reject(
+            Object.assign(error, {
+              output: `${String(stdout || '')}\n${String(stderr || '')}`,
+            })
+          );
           return;
         }
         resolve(stdout.trim());
@@ -245,16 +278,31 @@ export const detectQsdmNvidiaGPU = async (): Promise<QsdmNvidiaGPU> => {
       '--format=csv,noheader,nounits',
     ]);
   } catch (error: any) {
+    if (isQsdmNoNvidiaGpuProbeResult(error, String(error?.output || '')))
+      throw new Error(QSDM_NO_NVIDIA_GPU_MESSAGE);
     throw new Error(
       `NVIDIA GPU detection failed. Install a current NVIDIA driver and confirm nvidia-smi works. ${
         error?.message || error
       }`
     );
   }
+  if (isQsdmNoNvidiaGpuProbeResult(null, output))
+    throw new Error(QSDM_NO_NVIDIA_GPU_MESSAGE);
 
   const value = parseQsdmNvidiaSmiCsv(output, await readCudaVersion());
   cachedGPU = { value, expiresAt: Date.now() + 30_000 };
   return value;
+};
+
+// True only when this PC has no NVIDIA GPU at all. Any other detection
+// problem returns false, so starting the miner reports that problem instead.
+export const isQsdmNoNvidiaGpuPc = async () => {
+  try {
+    await detectQsdmNvidiaGPU();
+    return false;
+  } catch (error) {
+    return isQsdmNoNvidiaGpuError(error);
+  }
 };
 
 const getMinerConfigPath = () =>
@@ -275,21 +323,7 @@ const readConfigValue = (config: string, key: string) => {
     : value;
 };
 
-const escapeToml = (value: string) =>
-  value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-
-const setConfigValue = (config: string, key: string, value: string) => {
-  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const line = `${key} = "${escapeToml(value)}"`;
-  const matcher = new RegExp(
-    `^\\s*${escaped}\\s*=\\s*(?:"[^"]*"|'[^']*'|[^#\\r\\n]*)`,
-    'm'
-  );
-  if (matcher.test(config)) return config.replace(matcher, line);
-  return `${config}${
-    config.trim() && !config.endsWith('\n') ? '\n' : ''
-  }${line}\n`;
-};
+const setConfigValue = setQsdmMinerConfigStringValue;
 
 export const buildQsdmMinerNodeId = (
   hostname: string,
@@ -405,6 +439,8 @@ export const prepareQsdmMinerV2Config =
       reward_address: signer,
       validator_url: validatorBaseUrl(),
     };
+    // setConfigValue returns LF-only text, so a file with CR line endings
+    // differs and is rewritten here even when no value changed.
     const updated = Object.entries(values).reduce(
       (config, [key, value]) => setConfigValue(config, key, value),
       previous
@@ -412,8 +448,7 @@ export const prepareQsdmMinerV2Config =
     if (updated !== previous && fs.existsSync(configPath)) {
       fs.copyFileSync(configPath, `${configPath}.bak-${Date.now()}`);
     }
-    if (updated !== previous)
-      fs.writeFileSync(configPath, updated, { encoding: 'utf8', mode: 0o600 });
+    if (updated !== previous) writeQsdmMinerConfigFile(configPath, updated);
     return { ...gpu, nodeId, hmacKeyPath, configPath };
   };
 
@@ -430,10 +465,7 @@ const rotateLegacyMinerNodeId = (
     identity.configPath,
     `${identity.configPath}.bak-${Date.now()}`
   );
-  fs.writeFileSync(identity.configPath, updated, {
-    encoding: 'utf8',
-    mode: 0o600,
-  });
+  writeQsdmMinerConfigFile(identity.configPath, updated);
   return { ...identity, nodeId };
 };
 
@@ -543,10 +575,7 @@ export const writeQsdmAdoptedMinerIdentity = (
   const updated = setConfigValue(previous, 'node_id', nodeId);
   if (updated !== previous) {
     fs.copyFileSync(identity.configPath, `${identity.configPath}.bak-${now}`);
-    fs.writeFileSync(identity.configPath, updated, {
-      encoding: 'utf8',
-      mode: 0o600,
-    });
+    writeQsdmMinerConfigFile(identity.configPath, updated);
   }
   return { ...identity, nodeId };
 };
@@ -586,6 +615,75 @@ const fetchEnrollment = async (nodeId: string) => {
   }
 };
 
+// The enrollment record of a NodeID, or undefined when the chain has none
+// (HTTP 404). Any other failure throws.
+export const fetchQsdmMinerEnrollmentRecord = (nodeId: string) =>
+  fetchEnrollment(nodeId);
+
+// The NodeID in miner.toml, when Hive's v2 miner settings are complete.
+export const getQsdmMinerConfiguredNodeId = () =>
+  readConfiguredIdentity()?.nodeId;
+
+export type QsdmMinerBondMode = 'upfront' | 'mining_rewards';
+
+// How the user chose to bond each wallet's miner NodeID ("Use mining
+// earnings" or "Lock CELL now"), so Hive can enroll again the same way after
+// the chain removed the enrollment. Holds wallet addresses, NodeIDs and modes
+// only, never a secret.
+type QsdmMinerBondChoices = {
+  schema: 'qsdm.hive-miner-bond-choice.v1';
+  choices: Record<string, QsdmMinerBondMode>;
+};
+
+const getQsdmMinerBondChoicePath = () =>
+  path.join(
+    getAppDataPath(),
+    'namespace',
+    QSDM_MINER_SYSTEM_TASK_ID,
+    'miner-bond-choice.json'
+  );
+
+const bondChoiceKey = (owner: string, nodeId: string) =>
+  `${owner.toLowerCase()}:${nodeId}`;
+
+const readQsdmMinerBondChoices = (): QsdmMinerBondChoices['choices'] => {
+  try {
+    const file = JSON.parse(
+      fs.readFileSync(getQsdmMinerBondChoicePath(), 'utf8')
+    ) as Partial<QsdmMinerBondChoices>;
+    return file.schema === 'qsdm.hive-miner-bond-choice.v1' && file.choices
+      ? file.choices
+      : {};
+  } catch {
+    return {};
+  }
+};
+
+export const readQsdmMinerBondChoice = (
+  owner: string,
+  nodeId: string
+): QsdmMinerBondMode | undefined => {
+  const mode = readQsdmMinerBondChoices()[bondChoiceKey(owner, nodeId)];
+  return mode === 'upfront' || mode === 'mining_rewards' ? mode : undefined;
+};
+
+export const rememberQsdmMinerBondChoice = (
+  owner: string,
+  nodeId: string,
+  bondMode: QsdmMinerBondMode
+) => {
+  const choices = readQsdmMinerBondChoices();
+  const key = bondChoiceKey(owner, nodeId);
+  if (choices[key] === bondMode) return;
+  const filePath = getQsdmMinerBondChoicePath();
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const file: QsdmMinerBondChoices = {
+    schema: 'qsdm.hive-miner-bond-choice.v1',
+    choices: { ...choices, [key]: bondMode },
+  };
+  fs.writeFileSync(filePath, `${JSON.stringify(file, null, 2)}\n`, 'utf8');
+};
+
 export const getQsdmMinerEnrollmentStatus =
   async (): Promise<QsdmMinerEnrollmentStatus> => {
     const signerAddress = getQsdmTaskActionSender();
@@ -607,6 +705,7 @@ export const getQsdmMinerEnrollmentStatus =
         requiredStakeDust: 0,
         requiredStakeCell: 0,
         deferredBondAvailable: false,
+        noNvidiaGpu: isQsdmNoNvidiaGpuError(error),
         error: error?.message || String(error),
       };
     }
@@ -886,7 +985,20 @@ export const enrollQsdmMiner = async (
   while (Date.now() < deadline) {
     await delay(2_000);
     const current = await getQsdmMinerEnrollmentStatus();
-    if (current.ready) return current;
+    if (current.ready) {
+      if (current.signerAddress && current.nodeId) {
+        try {
+          rememberQsdmMinerBondChoice(
+            current.signerAddress,
+            current.nodeId,
+            bondMode
+          );
+        } catch {
+          // Only a convenience for enrolling again later; never fail here.
+        }
+      }
+      return current;
+    }
   }
   throw new Error(
     'Signed enrollment was submitted but was not confirmed within 120 seconds. Check Core connectivity and retry.'
