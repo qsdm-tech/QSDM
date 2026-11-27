@@ -17,8 +17,8 @@
   },
   "dependencies": {
     "mqtt": "^5.10.1",
-    "puppeteer": "^24.5.0",
-    "puppeteer-chromium-resolver": "^24.0.1"
+    "puppeteer": "^25.18.1",
+    "puppeteer-chromium-resolver": "^25.0.0"
   },
   "overrides": {
     "basic-ftp": "^6.2.4"
