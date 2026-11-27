@@ -5,7 +5,7 @@
 // differs from the baked-in pkg/buildinfo.Version, the miner fetches
 // MANIFEST.json, locates the binary for its (GOOS, GOARCH), streams
 // it to disk while computing SHA-256, and verifies the digest against
-// the manifest. On match, the new binary is staged at
+// the signed manifest. On match, the new binary is staged at
 // <currentExePath>.next. The miner does NOT auto-restart by default —
 // the staged file is applied at next startup (the operator's nssm /
 // systemd / manual restart). This is a deliberate two-step ritual:
@@ -15,20 +15,10 @@
 //
 // Security model:
 //
-//   - HTTPS to qsdm.tech is the transport gate. Without code-signing
-//     (which the project hasn't shipped yet — see "What's left" in
-//     the consumer-release commit message), HTTPS + SHA-256 from the
-//     manifest are the integrity gates.
-//   - The SHA-256 in MANIFEST.json is itself only as trustworthy as
-//     the file at https://qsdm.tech/releases/<tag>/MANIFEST.json.
-//     An attacker who can serve a malicious MANIFEST.json can also
-//     serve a matching malicious binary. Therefore the updater is
-//     EXACTLY the trust footprint of HTTPS-to-qsdm.tech, no more.
-//   - When code-signing lands, the verifier here will additionally
-//     check an Ed25519 signature on the manifest produced by an
-//     offline release key. That is a strict superset of the current
-//     posture; today's stage payload (raw downloaded bytes + matched
-//     SHA-256) becomes the input to the future signature check.
+//   - A locally provisioned ML-DSA-87 release key authenticates the
+//     exact manifest bytes before the updater trusts an artifact.
+//   - Apply verifies the staged manifest again and hashes the copy
+//     that it promotes to the running executable.
 //
 // Usage from the miner:
 //
@@ -38,36 +28,38 @@
 //	    GOOS:           runtime.GOOS,
 //	    GOARCH:         runtime.GOARCH,
 //	    CurrentVersion: buildinfo.Version,
-//	    HTTPClient:     http.DefaultClient,
+//	    TrustedKeyFile: "/etc/qsdm/miner-release.pub",
 //	}
-//	u := updater.New(cfg)
+//	u, err := updater.New(cfg)
+//	// Handle err before using u.
 //	res, err := u.CheckAndStage(ctx)
 //	if res.Staged { log.Printf("update %s staged at %s", res.NewVersion, res.StagedPath) }
 //
 // Then at startup, before the mining loop:
 //
-//	if applied, err := updater.ApplyStagedIfPresent(...); applied {
+//	if applied, err := u.ApplyStagedIfPresent(...); applied {
 //	    // process re-execs into the new binary; control never
 //	    // returns here on the success path.
 //	}
 package updater
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
+	"golang.org/x/mod/semver"
 )
 
 // utf8BOM is the byte-order mark some Windows tooling (notably
@@ -88,7 +80,7 @@ const (
 
 // Config drives a single Updater instance. Zero values are flagged
 // in New() so a caller can't accidentally build an Updater that
-// silently fetches from "" and "compares against ''".
+// silently fetches from "" and "compares against ”".
 type Config struct {
 	// BaseURL is the prefix for the release-host URLs. Trailing
 	// slash is stripped. Required.
@@ -128,6 +120,10 @@ type Config struct {
 	// operator can find it next to their existing exe.
 	StagePath string
 
+	// TrustedKeyFile holds a hex-encoded ML-DSA-87 release public key
+	// installed by the operator independently of the update feed.
+	TrustedKeyFile string
+
 	// MaxArtifactBytes caps the streamed download so a
 	// hostile or accidentally-huge MANIFEST entry can't
 	// blow up disk. Default 256 MiB — current artifacts
@@ -139,8 +135,10 @@ type Config struct {
 // CheckAndStage is safe for concurrent calls but typically only one
 // goroutine drives it on a timer.
 type Updater struct {
-	cfg Config
+	cfg        Config
+	releaseKey *mldsa87.PublicKey
 
+	stageMu  sync.Mutex
 	mu       sync.Mutex
 	lastSeen string // most recent tag we successfully read from latest.txt
 }
@@ -208,11 +206,12 @@ type ManifestComponent struct {
 // Errors. Distinct types so callers can log or branch without
 // substring-matching error strings.
 var (
-	ErrNoStagedUpdate     = errors.New("updater: no staged update file present")
-	ErrComponentNotFound  = errors.New("updater: component/os/arch not in manifest")
-	ErrSHA256Mismatch     = errors.New("updater: downloaded SHA-256 does not match manifest")
-	ErrCurrentVersionDev  = errors.New("updater: current version is dev — refusing to update a non-release build")
-	ErrInvalidConfig      = errors.New("updater: invalid configuration")
+	ErrNoStagedUpdate    = errors.New("updater: no staged update file present")
+	ErrComponentNotFound = errors.New("updater: component/os/arch not in manifest")
+	ErrSHA256Mismatch    = errors.New("updater: downloaded SHA-256 does not match manifest")
+	ErrReleaseNotNewer   = errors.New("updater: signed release is not newer")
+	ErrCurrentVersionDev = errors.New("updater: current version is dev — refusing to update a non-release build")
+	ErrInvalidConfig     = errors.New("updater: invalid configuration")
 )
 
 // New constructs an Updater after validating Config. It does NOT
@@ -230,6 +229,13 @@ func New(cfg Config) (*Updater, error) {
 	if cfg.CurrentVersion == "" {
 		return nil, fmt.Errorf("%w: CurrentVersion is required", ErrInvalidConfig)
 	}
+	if cfg.CurrentVersion != "dev" && !semver.IsValid(cfg.CurrentVersion) {
+		return nil, fmt.Errorf("%w: CurrentVersion must be a v-prefixed semantic version", ErrInvalidConfig)
+	}
+	key, err := loadReleaseKey(cfg.TrustedKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidConfig, err)
+	}
 	if cfg.LatestPath == "" {
 		cfg.LatestPath = DefaultLatestPath
 	}
@@ -240,7 +246,7 @@ func New(cfg Config) (*Updater, error) {
 		cfg.MaxArtifactBytes = 256 << 20
 	}
 	cfg.BaseURL = strings.TrimRight(cfg.BaseURL, "/")
-	return &Updater{cfg: cfg}, nil
+	return &Updater{cfg: cfg, releaseKey: key}, nil
 }
 
 // CheckAndStage runs one update cycle: fetch latest tag, compare
@@ -256,6 +262,9 @@ func New(cfg Config) (*Updater, error) {
 // comparison. The check is by SHA-256, not by mtime, so a
 // half-finished download from a previous run gets re-tried.
 func (u *Updater) CheckAndStage(ctx context.Context) (Result, error) {
+	u.stageMu.Lock()
+	defer u.stageMu.Unlock()
+
 	if u.cfg.CurrentVersion == "dev" {
 		return Result{
 			SkippedReason: "current build is 'dev' (no buildinfo injection)",
@@ -271,21 +280,22 @@ func (u *Updater) CheckAndStage(ctx context.Context) (Result, error) {
 	u.lastSeen = tag
 	u.mu.Unlock()
 
-	if tag == u.cfg.CurrentVersion {
-		return Result{Checked: true, UpToDate: true, NewVersion: tag}, nil
+	if !semver.IsValid(tag) {
+		return Result{Checked: true}, fmt.Errorf("latest.txt does not contain a v-prefixed semantic version")
+	}
+	if order := semver.Compare(tag, u.cfg.CurrentVersion); order <= 0 {
+		return Result{Checked: true, UpToDate: order == 0, NewVersion: tag, SkippedReason: "latest release is not newer"}, nil
 	}
 
-	mf, err := u.fetchManifest(ctx, tag)
+	mf, authorization, err := u.fetchManifest(ctx, tag)
 	if err != nil {
 		return Result{Checked: true, NewVersion: tag},
 			fmt.Errorf("fetch manifest %s: %w", tag, err)
 	}
 
-	c, ok := findComponent(mf, u.cfg.Component, u.cfg.GOOS, u.cfg.GOARCH)
-	if !ok {
-		return Result{Checked: true, NewVersion: tag},
-			fmt.Errorf("%w: %s/%s/%s in tag %s",
-				ErrComponentNotFound, u.cfg.Component, u.cfg.GOOS, u.cfg.GOARCH, tag)
+	c, err := u.selectComponent(mf)
+	if err != nil {
+		return Result{Checked: true, NewVersion: tag}, err
 	}
 
 	stagePath, err := u.resolveStagePath()
@@ -299,23 +309,29 @@ func (u *Updater) CheckAndStage(ctx context.Context) (Result, error) {
 	// case where the operator restarts the miner between the
 	// stage step and the apply step — we don't want to
 	// re-download a 15 MiB artifact every restart.
-	if existing, ok := stagedHashEquals(stagePath, c.SHA256); ok && existing {
+	if stagedHashEquals(stagePath, c) {
+		if err := authorization.save(stagePath); err != nil {
+			return Result{Checked: true, NewVersion: tag}, err
+		}
 		return Result{
-			Checked:    true,
-			NewVersion: tag,
-			Staged:     false,
-			StagedPath: stagePath,
-			SHA256:     c.SHA256,
-			SizeBytes:  c.SizeBytes,
+			Checked:       true,
+			NewVersion:    tag,
+			Staged:        false,
+			StagedPath:    stagePath,
+			SHA256:        c.SHA256,
+			SizeBytes:     c.SizeBytes,
 			SkippedReason: "stage file already matches manifest sha256",
 		}, nil
 	}
 
-	artifactURL := u.cfg.BaseURL + "/" + tag + "/" + c.File
+	artifactURL := u.cfg.BaseURL + "/" + tag + "/" + url.PathEscape(c.File)
 	gotSize, gotSHA, err := u.downloadVerified(ctx, artifactURL, c.SHA256, c.SizeBytes, stagePath)
 	if err != nil {
 		return Result{Checked: true, NewVersion: tag},
 			fmt.Errorf("download %s: %w", c.File, err)
+	}
+	if err := authorization.save(stagePath); err != nil {
+		return Result{Checked: true, NewVersion: tag}, err
 	}
 
 	return Result{
@@ -389,8 +405,8 @@ func looksLikeTag(s string) bool {
 	return true
 }
 
-func (u *Updater) fetchManifest(ctx context.Context, tag string) (*Manifest, error) {
-	url := u.cfg.BaseURL + "/" + tag + "/" + ManifestFileName
+func (u *Updater) fetchReleaseFile(ctx context.Context, path string, maxBytes int64) ([]byte, error) {
+	url := u.cfg.BaseURL + "/" + path
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(cctx, http.MethodGet, url, nil)
@@ -405,26 +421,7 @@ func (u *Updater) fetchManifest(ctx context.Context, tag string) (*Manifest, err
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("HTTP %d for %s", resp.StatusCode, url)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return nil, err
-	}
-	body = bytes.TrimPrefix(body, utf8BOM)
-	var m Manifest
-	if err := json.Unmarshal(body, &m); err != nil {
-		return nil, fmt.Errorf("decode manifest: %w", err)
-	}
-	if m.Version == "" {
-		return nil, errors.New("manifest version field is empty")
-	}
-	if m.Version != tag {
-		// Sanity-check: latest.txt and the manifest version
-		// should agree. If they don't, the publisher is
-		// mid-deploy and we'd rather wait one more cycle than
-		// race against a half-uploaded set of artefacts.
-		return nil, fmt.Errorf("manifest version %q != tag %q", m.Version, tag)
-	}
-	return &m, nil
+	return readBounded(resp.Body, maxBytes)
 }
 
 func findComponent(m *Manifest, name, goos, goarch string) (ManifestComponent, bool) {
@@ -472,38 +469,32 @@ func (u *Updater) downloadVerified(ctx context.Context, url, expectedSHA string,
 		return 0, "", fmt.Errorf("HTTP %d for %s", resp.StatusCode, url)
 	}
 
-	tmpPath := stagePath + ".part"
 	if err := os.MkdirAll(filepath.Dir(stagePath), 0o755); err != nil {
 		return 0, "", fmt.Errorf("mkdir staging: %w", err)
 	}
-	f, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	f, err := os.CreateTemp(filepath.Dir(stagePath), ".qsdm-update-part-*")
 	if err != nil {
-		return 0, "", fmt.Errorf("open %s: %w", tmpPath, err)
+		return 0, "", fmt.Errorf("create staging file: %w", err)
 	}
+	tmpPath := f.Name()
+	defer os.Remove(tmpPath)
 
 	hasher := sha256.New()
-	cap := io.LimitReader(resp.Body, u.cfg.MaxArtifactBytes+1)
+	cap := io.LimitReader(resp.Body, expectedSize+1)
 	mw := io.MultiWriter(f, hasher)
 	n, err := io.Copy(mw, cap)
 	if cerr := f.Close(); err == nil && cerr != nil {
 		err = cerr
 	}
 	if err != nil {
-		_ = os.Remove(tmpPath)
 		return 0, "", fmt.Errorf("write staged artifact: %w", err)
 	}
-	if n > u.cfg.MaxArtifactBytes {
-		_ = os.Remove(tmpPath)
-		return 0, "", fmt.Errorf("artifact exceeded MaxArtifactBytes=%d", u.cfg.MaxArtifactBytes)
-	}
-	if expectedSize > 0 && n != expectedSize {
-		_ = os.Remove(tmpPath)
+	if n != expectedSize {
 		return 0, "", fmt.Errorf("size mismatch: got %d, manifest says %d", n, expectedSize)
 	}
 
 	got := hex.EncodeToString(hasher.Sum(nil))
 	if !strings.EqualFold(got, expectedSHA) {
-		_ = os.Remove(tmpPath)
 		return n, got, fmt.Errorf("%w: got %s, want %s", ErrSHA256Mismatch, got, expectedSHA)
 	}
 
@@ -513,103 +504,7 @@ func (u *Updater) downloadVerified(ctx context.Context, url, expectedSHA string,
 	// source + destination are on the same volume (and they
 	// always are here — both live next to the exe).
 	if err := os.Rename(tmpPath, stagePath); err != nil {
-		_ = os.Remove(tmpPath)
 		return n, got, fmt.Errorf("rename staged artifact: %w", err)
 	}
 	return n, got, nil
-}
-
-// stagedHashEquals is the no-network idempotency check used in
-// CheckAndStage: if a staged file already exists at `path` AND its
-// sha256 matches `expected`, return (true, true). Errors (file
-// missing / unreadable / bad permissions) all collapse to
-// (false, false) so the caller's logic stays simple.
-func stagedHashEquals(path, expected string) (matches bool, exists bool) {
-	f, err := os.Open(path)
-	if err != nil {
-		return false, false
-	}
-	defer f.Close()
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return false, true
-	}
-	got := hex.EncodeToString(h.Sum(nil))
-	return strings.EqualFold(got, expected), true
-}
-
-// ApplyStaged performs the on-disk swap and re-execs the new binary.
-// Returns ErrNoStagedUpdate when nothing is staged. On the success
-// path the caller's process is replaced and control never returns.
-//
-// The swap sequence is:
-//
-//   1. Verify <stagePath> exists and is non-empty.
-//   2. Move <currentExePath> → <currentExePath>.old (a previous
-//      .old is overwritten — we keep at most one rollback copy).
-//   3. Move <stagePath> → <currentExePath>.
-//   4. Re-exec <currentExePath> with the same args + env, then
-//      exit the current process.
-//
-// On Unix step 4 uses syscall.Exec which replaces the process image
-// in place. On Windows there is no exec(); we start the new process
-// as a child and exit, relying on the service manager (nssm /
-// systemd / manual `Restart-Service`) to reattach to the new pid.
-// In practice the typical consumer flow is "operator runs miner
-// under nssm; nssm restarts on exit; new binary runs" — same
-// outcome on all platforms even though the syscalls differ.
-func ApplyStaged(stagePath, currentExePath string, argv []string) error {
-	st, err := os.Stat(stagePath)
-	if err != nil {
-		return ErrNoStagedUpdate
-	}
-	if st.Size() == 0 {
-		_ = os.Remove(stagePath)
-		return fmt.Errorf("staged file %s is empty; removed", stagePath)
-	}
-
-	oldPath := currentExePath + ".old"
-	// Step 2: best-effort move old binary aside. On Windows
-	// this works while the binary is running; if the rename
-	// fails we still try the rest of the sequence.
-	_ = os.Remove(oldPath)
-	_ = os.Rename(currentExePath, oldPath)
-
-	// Step 3: promote the staged binary into place.
-	if err := os.Rename(stagePath, currentExePath); err != nil {
-		// Rollback if we moved the original aside.
-		_ = os.Rename(oldPath, currentExePath)
-		return fmt.Errorf("apply: rename staged into place: %w", err)
-	}
-
-	// Step 4: spawn the new binary.
-	args := argv
-	if len(args) == 0 {
-		args = []string{currentExePath}
-	}
-	cmd := exec.Command(currentExePath, args[1:]...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Env = os.Environ()
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("apply: start new binary: %w", err)
-	}
-	// Don't Wait — the parent must exit so service managers
-	// reattach; nssm/systemd see a non-zero/zero exit and
-	// supervise the new pid (or don't, if running standalone).
-	os.Exit(0)
-	return nil // unreachable
-}
-
-// ApplyStagedIfPresent is a convenience wrapper: looks for a
-// .next file next to the running exe, applies if present, returns
-// (false, nil) if absent. Designed for unconditional invocation at
-// startup behind a `--auto-apply` flag.
-func ApplyStagedIfPresent(currentExePath string, argv []string) (bool, error) {
-	stagePath := currentExePath + ".next"
-	if _, err := os.Stat(stagePath); err != nil {
-		return false, nil
-	}
-	return true, ApplyStaged(stagePath, currentExePath, argv)
 }

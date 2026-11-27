@@ -1242,8 +1242,7 @@ func realMain(parentCtx context.Context) int {
 	// even though I also typed --version" override.
 	if !consumer.ApplyStaged {
 		if _, err := applyStagedUpdateAtStartup(consumer); err != nil {
-			fmt.Fprintf(os.Stderr, "qsdmminer: apply staged update: %v\n", err)
-			return 1
+			fmt.Fprintf(os.Stderr, "qsdmminer: skipping staged update: %v\n", err)
 		}
 	}
 
