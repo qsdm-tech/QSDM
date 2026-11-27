@@ -301,10 +301,11 @@ struct at the top of `cmd/qsdmminer-console/main.go`.
 
 The console miner checks for updates only when you enable `--auto-update`. Set
 `--update-public-key-file` to a trusted release public key you installed locally.
-The file must contain the hex-encoded ML-DSA-87 public key. Verify that key with
-the release owner independently of the update feed. Set `--update-url` if your
+The file must contain the hex-encoded ML-DSA-87 public key. Use the [console release public key](../../deploy/release-trust/qsdm-console-release-key-v1.hex) from the official repository.
+The key fingerprint is the SHA-256 of the decoded key bytes.
+`f03d0b24865b15a9a2f6edc0d40efe67d5f3050978c346adea84e8653a5957b7`. Set `--update-url` if your
 operator uses a separate release host. The default signed feed is
-`https://qsdm.tech/releases/console-v1`. Install and verify the first signed
+`https://qsdm.tech/downloads/console-v1`. Install and verify the first signed
 release manually before enabling automatic updates.
 
 The release host publishes the binary, `MANIFEST.json`, and

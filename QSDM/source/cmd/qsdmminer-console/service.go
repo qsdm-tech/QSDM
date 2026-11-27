@@ -130,7 +130,7 @@ func RegisterConsumerFlags(fs *flag.FlagSet, out *ConsumerFlags) {
 
 	fs.DurationVar(&out.AutoUpdate, "auto-update", 0,
 		"poll the signed update feed every N and apply a verified update at next startup; 0 disables polling")
-	fs.StringVar(&out.UpdateURL, "update-url", "https://qsdm.tech/releases/console-v1",
+	fs.StringVar(&out.UpdateURL, "update-url", "https://qsdm.tech/downloads/console-v1",
 		"base URL for the release manifest + binaries (no trailing slash)")
 	fs.StringVar(&out.UpdateKeyFile, "update-public-key-file", "",
 		"trusted release public key file (hex ML-DSA-87), required for staging or applying updates")
