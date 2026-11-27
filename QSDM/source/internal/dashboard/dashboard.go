@@ -1022,11 +1022,12 @@ func (d *Dashboard) handleLogin(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	redirectTarget := "/"
-	if target := parseLocalRedirect(strings.TrimSpace(r.URL.Query().Get("redirect"))); target != nil {
-		redirectTarget = target.String()
+	target := parseLocalRedirect(strings.TrimSpace(r.URL.Query().Get("redirect")))
+	if target != nil && target.Hostname() == "" {
+		http.Redirect(w, r, target.String(), http.StatusFound)
+		return
 	}
-	http.Redirect(w, r, redirectTarget, http.StatusFound)
+	http.Redirect(w, r, "/", http.StatusFound)
 }
 
 // parseLocalRedirect returns a validated URL for a path on this dashboard, so a login
