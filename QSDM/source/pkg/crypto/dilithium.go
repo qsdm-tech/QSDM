@@ -381,34 +381,32 @@ func (d *Dilithium) SignBatchOptimized(messages [][]byte) ([][]byte, error) {
 
 // Verify verifies the signature for the given message
 func (d *Dilithium) Verify(message []byte, signature []byte) (bool, error) {
-	if d.sig == nil {
+	if d == nil {
 		return false, errors.New("Dilithium not initialized")
 	}
-	ret := C.OQS_SIG_verify(
-		d.sig,
-		(*C.uchar)(unsafe.Pointer(&message[0])),
-		C.size_t(len(message)),
-		(*C.uchar)(unsafe.Pointer(&signature[0])),
-		C.size_t(len(signature)),
-		(*C.uchar)(unsafe.Pointer(&d.pk[0])),
-	)
-	if ret == C.OQS_SUCCESS {
-		return true, nil
-	}
-	return false, nil
+	return d.VerifyWithPublicKey(message, signature, d.pk)
 }
 
 // VerifyWithPublicKey verifies the signature for the given message using the provided public key
 func (d *Dilithium) VerifyWithPublicKey(message []byte, signature []byte, publicKey []byte) (bool, error) {
-	if d.sig == nil {
+	if d == nil || d.sig == nil {
 		return false, errors.New("Dilithium not initialized")
 	}
 	if len(publicKey) != int(d.sig.length_public_key) {
 		return false, fmt.Errorf("invalid public key length: expected %d, got %d", d.sig.length_public_key, len(publicKey))
 	}
+	if len(signature) != int(d.sig.length_signature) {
+		return false, fmt.Errorf("invalid signature length: expected %d, got %d", d.sig.length_signature, len(signature))
+	}
+	// A non-nil pointer keeps the C call valid for a zero-length message.
+	var emptyMessage byte
+	messagePtr := unsafe.SliceData(message)
+	if len(message) == 0 {
+		messagePtr = &emptyMessage
+	}
 	ret := C.OQS_SIG_verify(
 		d.sig,
-		(*C.uchar)(unsafe.Pointer(&message[0])),
+		(*C.uchar)(unsafe.Pointer(messagePtr)),
 		C.size_t(len(message)),
 		(*C.uchar)(unsafe.Pointer(&signature[0])),
 		C.size_t(len(signature)),
