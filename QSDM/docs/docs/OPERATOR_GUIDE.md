@@ -248,9 +248,9 @@ Mining requires an NVIDIA GPU (Turing or newer); see [Mining today](MINING_TODAY
 
 ### 3.4 Install & run
 
-**Recommended:** install QSDM Hive 1.4.23 and run the Miner task; see
+**Recommended:** install QSDM Hive 1.4.27 and run the Miner task; see
 [Mining today](MINING_TODAY.md) and
-[Downloads and verification](DOWNLOADS_AND_VERIFICATION.md). Hive 1.4.23
+[Downloads and verification](DOWNLOADS_AND_VERIFICATION.md). Hive 1.4.27
 signs miner operator actions automatically.
 
 The command-line miners below are operator and conformance tools that
@@ -274,7 +274,7 @@ command-line miner binaries ship in-tree — pick one:
 
 Either way:
 
-1. `git clone https://github.com/blackbeardONE/QSDM.git && cd
+1. `git clone https://github.com/qsdm-tech/QSDM.git && cd
    QSDM/source`.
 2. `go build -o qsdmminer-console ./cmd/qsdmminer-console` (or swap
    in `./cmd/qsdmminer` for the reference binary).

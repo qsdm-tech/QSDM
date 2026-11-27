@@ -9,6 +9,11 @@ on:
       - 'source/pkg/mesh3d/**'
   workflow_dispatch:
 
+# Builds and tests only (artifacts go through actions/upload-artifact), so
+# the token needs read access to the contents and nothing else.
+permissions:
+  contents: read
+
 jobs:
   build-cuda-kernels:
     runs-on: ubuntu-latest

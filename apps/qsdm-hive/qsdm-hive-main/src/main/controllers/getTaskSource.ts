@@ -7,8 +7,6 @@ import { ErrorType, GetTaskSourceParam } from 'models';
 import { QsdmTasksListResponse } from 'models/api/qsdm';
 import { throwDetailedError } from 'utils';
 
-import { fetchFromIPFSOrArweave } from './fetchFromIPFSOrArweave';
-
 const buildNativeTaskSource = (taskId: string): string => `
 const http = require('http');
 
@@ -81,6 +79,9 @@ process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 `;
 
+// Hive runs only the task runtimes it ships, for tasks listed in the QSDM task
+// catalog. It never downloads task code: a catalog read that fails, or a task
+// the catalog does not list, stops the start.
 const getQsdmNativeTaskSource = async (
   taskAuditProgram: string
 ): Promise<string | null> => {
@@ -99,7 +100,7 @@ const getQsdmNativeTaskSource = async (
       'Native QSDM task source is temporarily unavailable.',
       error instanceof Error ? error.message : String(error)
     );
-    return null;
+    throw new Error('The QSDM task catalog is unavailable; try again.');
   }
 
   const task = (response.tasks || []).find(
@@ -108,7 +109,7 @@ const getQsdmNativeTaskSource = async (
       candidate.task_id === taskAuditProgram
   );
   if (!task) {
-    return null;
+    throw new Error('This task is not in the QSDM catalog.');
   }
   const runtimeIssue = getQsdmTaskRuntimeCompatibilityIssue(
     task,
@@ -136,23 +137,12 @@ export const getTaskSource = async (
 ): Promise<string> => {
   try {
     const nativeSource = await getQsdmNativeTaskSource(taskAuditProgram);
-    if (nativeSource) {
-      return nativeSource;
+    if (!nativeSource) {
+      throw new Error(
+        'QSDM Hive runs only built-in task runtimes; it does not download task code.'
+      );
     }
-
-    const sourceCode = await fetchFromIPFSOrArweave(
-      taskAuditProgram,
-      'main.js'
-    );
-
-    if (!sourceCode) {
-      return throwDetailedError({
-        detailed: `No Task source found of ID ${taskAuditProgram} to fetch`,
-        type: ErrorType.NO_TASK_SOURCECODE,
-      });
-    }
-
-    return sourceCode;
+    return nativeSource;
   } catch (e: any) {
     console.error(e);
     return throwDetailedError({

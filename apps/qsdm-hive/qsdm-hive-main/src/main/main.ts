@@ -42,7 +42,9 @@ import { setUpPowerStateManagement } from './powerMonitor';
 import { configureMainWindowSecurity } from './security/externalNavigation';
 import { trackEvent } from './services/analytics';
 import ExecutableMonitor from './services/ExecutableMonitorService';
+import { isHiveE2ETestRun } from './services/hiveE2E';
 import qsdmHiveTasks from './services/qsdmHiveTasks';
+import { installQsdmRateLimitRetry } from './services/qsdmHttpRetry';
 import {
   cleanupQsdmSignerSecretStore,
   initializeQsdmSignerSecretStore,
@@ -52,6 +54,7 @@ import {
   stopQsdmWalletProviderBroker,
 } from './services/qsdmWalletProviderBroker';
 import { registerQsdmWalletProviderNativeHost } from './services/qsdmWalletProviderNativeHost';
+import { ensureQsdmWalletStore } from './services/qsdmWalletStore';
 import { resolveHtmlPath, sleep } from './util';
 
 import type { Event } from 'electron';
@@ -602,9 +605,12 @@ const installExtensions = async () => {
 };
 
 const main = async (): Promise<void> => {
+  // Before any API call: one shared retry for HTTP 429 (qsdmHttpRetry).
+  installQsdmRateLimitRetry();
   initHandlers();
 
-  if (isProductionRuntime && !isSmokeTest) {
+  // An end-to-end test run changes nothing outside Hive's data folder.
+  if (isProductionRuntime && !isSmokeTest && !isHiveE2ETestRun()) {
     try {
       const registration = registerQsdmWalletProviderNativeHost();
       console.log('QSDM browser wallet bridge registered', registration);
@@ -616,6 +622,18 @@ const main = async (): Promise<void> => {
     }
   }
 
+  // 1.4.25: move the single signer wallet into the wallet list (the active wallet does not change).
+  try {
+    const walletStore = ensureQsdmWalletStore();
+    console.log('QSDM wallet list ready', {
+      wallets: walletStore.wallets.length,
+    });
+  } catch (error) {
+    console.warn(
+      'QSDM wallet list could not be prepared; the active wallet keeps working.',
+      (error as Error)?.message
+    );
+  }
   const signerSecretStatus = initializeQsdmSignerSecretStore();
   console.log('QSDM signer secret storage initialized', {
     configured: signerSecretStatus.configured,
@@ -783,7 +801,9 @@ const createWindow = async () => {
   // A slow service bootstrap must never delay a required Hive update.
   await initializeAppUpdater(mainWindow, appCleanup);
 
-  await setLaunchOnRestartOnByDefault(userConfig);
+  if (!isHiveE2ETestRun()) {
+    await setLaunchOnRestartOnByDefault(userConfig);
+  }
 
   await main().catch((err): void => {
     writeStartupLog('main bootstrap failed', {
@@ -869,6 +889,9 @@ const createWindow = async () => {
   });
 
   try {
+    if (isHiveE2ETestRun()) {
+      throw new Error('not in an end-to-end test run');
+    }
     const protocolRegistered = process.defaultApp
       ? process.argv.length >= 2 &&
         app.setAsDefaultProtocolClient('qsdm-hive', process.execPath, [

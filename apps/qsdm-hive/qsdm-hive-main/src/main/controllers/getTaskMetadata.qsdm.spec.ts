@@ -85,4 +85,31 @@ describe('getTaskMetadata qsdm-native', () => {
       'utf-8'
     );
   });
+
+  it.each([
+    '../wallets/default_mainSystemWallet',
+    'https://tasks.example.com/metadata.json',
+  ])('never uses the metadata id %p as a file name', async (metadataCID) => {
+    mockedAxiosGet.mockResolvedValue({
+      data: {
+        tasks: [
+          {
+            task_id: 'community-task',
+            task_name: 'Community task',
+            task_manager: 'manager',
+            task_metadata: metadataCID,
+            task_description: 'A catalog task.',
+          },
+        ],
+      },
+    });
+
+    const { getTaskMetadata } = await import('./getTaskMetadata');
+    const result = await getTaskMetadata({} as Event, { metadataCID });
+
+    expect(result.description).toBe('A catalog task.');
+    expect(fsPromises.writeFile).not.toHaveBeenCalled();
+    expect(fsPromises.access).not.toHaveBeenCalled();
+    expect(fsPromises.readFile).not.toHaveBeenCalled();
+  });
 });

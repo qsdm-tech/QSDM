@@ -1,0 +1,93 @@
+name: QSDM Hive e2e
+
+# Drives the real Electron app (the production webpack build, not packaged)
+# with Playwright under xvfb: launch, create a wallet, switch wallets, Recent
+# transactions and the Bug Bounty row. The QSDM API and the bounty ledger are a
+# local mock server (apps/qsdm-hive/qsdm-hive-main/e2e/support/mockApi.ts); the
+# app runs with QSDM_HIVE_E2E=1 (no version policy, no updater, nothing outside
+# its temp profile; only honoured when not packaged). No secrets.
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "apps/qsdm-hive/qsdm-hive-main/**"
+      - "QSDM/source/cmd/qsdmcli/**"
+      - ".github/workflows/qsdm-hive-e2e.yml"
+
+concurrency:
+  group: qsdm-hive-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e-linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: QSDM/source/go.mod
+          cache-dependency-path: QSDM/source/go.sum
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.12.0"
+          cache: npm
+          cache-dependency-path: |
+            apps/qsdm-hive/qsdm-hive-main/package-lock.json
+            apps/qsdm-hive/qsdm-hive-main/release/app/package-lock.json
+
+      # Creating a wallet runs the real qsdmcli (wallet new).
+      - name: Build qsdmcli
+        working-directory: QSDM/source
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          mkdir -p ../../apps/qsdm-hive/qsdm-hive-main/native/linux/x64
+          go build -trimpath -ldflags "-s -w" -o ../../apps/qsdm-hive/qsdm-hive-main/native/linux/x64/qsdmcli ./cmd/qsdmcli
+
+      - name: Install xvfb and Electron's libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb libnss3 libgbm1 libasound2t64 libgtk-3-0t64 libxss1
+
+      - name: Install Hive dependencies and Electron
+        working-directory: apps/qsdm-hive/qsdm-hive-main
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: "1"
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+        run: |
+          npm ci --ignore-scripts
+          npm --prefix release/app ci --ignore-scripts
+          node node_modules/electron/install.js
+          npm exec electron-builder -- install-app-deps
+          sandbox_helper=node_modules/electron/dist/chrome-sandbox
+          sudo chown root:root "$sandbox_helper"
+          sudo chmod 4755 "$sandbox_helper"
+
+      - name: Build Hive
+        working-directory: apps/qsdm-hive/qsdm-hive-main
+        run: npm run build
+
+      - name: Run the e2e tests
+        working-directory: apps/qsdm-hive/qsdm-hive-main
+        env:
+          CI: "1"
+        run: xvfb-run -a npm run test:e2e
+
+      - name: Keep the report
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: qsdm-hive-e2e-${{ github.sha }}
+          path: |
+            apps/qsdm-hive/qsdm-hive-main/e2e/report
+            apps/qsdm-hive/qsdm-hive-main/e2e/test-results
+          retention-days: 7

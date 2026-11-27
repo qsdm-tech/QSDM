@@ -55,6 +55,7 @@ import (
 	cryptorand "crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -108,6 +109,10 @@ func (c *CLI) walletCommand(args []string) error {
 		return c.walletSignStreamAction(rest)
 	case "sign-token-tx":
 		return c.walletSignTokenTx(rest)
+	case "sign-pulse-action":
+		return c.walletSignPulseAction(rest)
+	case "sign-pulse-register":
+		return c.walletSignPulseRegister(rest)
 	case "help", "-h", "--help":
 		fmt.Fprint(os.Stdout, walletHelp)
 		return nil
@@ -117,7 +122,7 @@ func (c *CLI) walletCommand(args []string) error {
 }
 
 func walletUsageError() error {
-	return fmt.Errorf("usage: qsdmcli wallet <new|restore|enable-recovery|restore-legacy|export-recovery|show|inspect|sign|verify|sign-tx|sign-task-action|sign-stream-action|sign-token-tx> [flags]\n\n%s", walletHelp)
+	return fmt.Errorf("usage: qsdmcli wallet <new|restore|enable-recovery|restore-legacy|export-recovery|show|inspect|sign|verify|sign-tx|sign-task-action|sign-stream-action|sign-token-tx|sign-pulse-action|sign-pulse-register> [flags]\n\n%s", walletHelp)
 }
 
 const walletHelp = `qsdmcli wallet — self-custody keystore (ML-DSA-87)
@@ -163,6 +168,15 @@ Subcommands:
            POST /api/v1/streams/actions/submit-signed. Reads an action
            or {"action": ...} JSON object, optionally stamps --nonce,
            and writes the signed envelope to stdout.
+  sign-pulse-action
+           Sign a PULSE pool member transaction (join, leave or
+           reclaim) for POST /api/v1/pulse/submit-signed. Reads
+           {"sender", "nonce", "fee", "action": {"op", ...}} (JSON on
+           stdin by default) and writes the signed envelope to stdout.
+  sign-pulse-register
+           Sign a PULSE pool login (--worker NAME optional), proving
+           this wallet holds the payout address. Writes {login,
+           public_key, signature} to stdout.
   sign-token-tx
            Sign a QSDM-20 token transaction (create, transfer, mint,
            burn or renounce; see QSDM_20.md) and write the body of
@@ -179,8 +193,11 @@ Common flags:
   --passphrase-file FILE
                         Read passphrase from FILE (use '-' for stdin).
                         Omit to prompt interactively without echo.
-  --force               Overwrite an existing keystore (new only). Off by default.
-  --recovery-out PATH   Write new/exported recovery words to PATH with mode 0600.
+  --force               Replace an existing output file (keystore or recovery
+                        words) with a new private file. Off by default.
+                        Symbolic links and hard-linked files are refused.
+  --recovery-out PATH   Write new/exported recovery words to PATH as a new
+                        private file (mode 0600 on Linux and macOS).
   --recovery-file PATH  Read 24 recovery words from PATH (restore only).
 
 Legacy recovery flags:
@@ -268,6 +285,17 @@ func (c *CLI) walletNew(args []string) error {
 				return fmt.Errorf("refusing to overwrite existing recovery file at %s (pass --force to override)", recoveryPath)
 			}
 		}
+	} else {
+		// Check both targets before the keystore is replaced, so a refused
+		// recovery path cannot leave a new keystore without its words file.
+		if err := checkReplaceableFile(path); err != nil {
+			return err
+		}
+		if recoveryPath != "" {
+			if err := checkReplaceableFile(recoveryPath); err != nil {
+				return err
+			}
+		}
 	}
 	passphrase, err := readPassphrase(*passphraseFile, true /*confirm*/)
 	if err != nil {
@@ -328,11 +356,11 @@ func (c *CLI) walletNew(args []string) error {
 		if err := writeFileExclusive(recoveryPath, []byte(recoveryWords+"\n"), *force); err != nil {
 			return fmt.Errorf("write recovery words: %w", err)
 		}
-		fmt.Fprintf(os.Stderr, "wrote 24 QSDM Recovery Words to %s (mode 0600)\n", recoveryPath)
+		fmt.Fprintf(os.Stderr, "wrote 24 QSDM Recovery Words to %s (%s)\n", recoveryPath, fileAccessNote(recoveryPath))
 	}
 	// Stdout: only the address, so the line can be piped straight into a
 	// miner / mining-enroll command. Everything else goes to stderr.
-	fmt.Fprintf(os.Stderr, "wrote keystore to %s (mode 0600)\n", path)
+	fmt.Fprintf(os.Stderr, "wrote keystore to %s (%s)\n", path, fileAccessNote(path))
 	if recoveryWords != "" {
 		fmt.Fprintln(os.Stderr, "keep the recovery words offline and separate from this device; they can rebuild the wallet without this JSON file")
 	} else {
@@ -404,7 +432,7 @@ func (c *CLI) walletRestore(args []string) error {
 	if err := writeFileExclusive(path, data, *force); err != nil {
 		return fmt.Errorf("write keystore: %w", err)
 	}
-	fmt.Fprintf(os.Stderr, "restored recovery-enabled keystore to %s (mode 0600)\n", path)
+	fmt.Fprintf(os.Stderr, "restored recovery-enabled keystore to %s (%s)\n", path, fileAccessNote(path))
 	fmt.Println(ks.Address)
 	return nil
 }
@@ -475,7 +503,7 @@ func (c *CLI) walletExportRecovery(args []string) error {
 	if err := writeFileExclusive(recoveryPath, []byte(words+"\n"), *force); err != nil {
 		return fmt.Errorf("write recovery words: %w", err)
 	}
-	fmt.Fprintf(os.Stderr, "exported 24 QSDM Recovery Words for %s to %s (mode 0600)\n", ks.Address, recoveryPath)
+	fmt.Fprintf(os.Stderr, "exported 24 QSDM Recovery Words for %s to %s (%s)\n", ks.Address, recoveryPath, fileAccessNote(recoveryPath))
 	return nil
 }
 
@@ -524,9 +552,16 @@ func (c *CLI) walletEnableLegacyRecovery(args []string) error {
 		if _, statErr := os.Stat(recoveryPath); statErr == nil {
 			return fmt.Errorf("refusing to overwrite existing recovery file at %s (pass --force to override)", recoveryPath)
 		}
+	} else if err := checkReplaceableFile(recoveryPath); err != nil {
+		return err
 	}
 	ks, err := loadKeystore(path)
 	if err != nil {
+		return err
+	}
+	// The keystore is replaced only after the capsule is confirmed on chain,
+	// so make sure now that it can be replaced.
+	if err := checkReplaceableFile(path); err != nil {
 		return err
 	}
 	if expected := strings.TrimSpace(*expectedAddress); expected != "" {
@@ -627,7 +662,7 @@ func (c *CLI) walletEnableLegacyRecovery(args []string) error {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "enabled 24-word recovery for %s without changing its address\n", ks.Address)
-	fmt.Fprintf(os.Stderr, "recovery words: %s\n", recoveryPath)
+	fmt.Fprintf(os.Stderr, "recovery words: %s (%s)\n", recoveryPath, fileAccessNote(recoveryPath))
 	fmt.Fprintf(os.Stderr, "original keystore backup: %s\n", backupPath)
 	fmt.Println(ks.Address)
 	return nil
@@ -1171,23 +1206,147 @@ func readAllFromPathOrStdin(path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
-// writeFileExclusive writes data with mode 0600. If force is false and
-// the target exists, returns an error. The mode-0600 part matters on
-// Unix — the keystore file contains an attacker-controlled ciphertext
-// that survives offline passphrase-cracking attempts, so we should at
-// least keep it out of `other`/`group`.
+// writeFileExclusive writes a secret (a keystore or recovery words) to a
+// file that only its owner can read.
+//
+// Without force it creates path with O_CREATE|O_EXCL and mode 0600 and
+// refuses an existing file, as it always has.
+//
+// With force it never writes into an existing file. os.OpenFile applies the
+// mode only when it creates a file, so the old O_TRUNC overwrite kept a 0644
+// file at 0644 with the 24 recovery words in it, while the CLI printed
+// "(mode 0600)" (security report, November 2026). The data now goes to a new
+// 0600 file in the same directory, which is synced and renamed over path. A
+// target that is a symbolic link, not a regular file, or has other hard links
+// is refused (see checkReplaceableFile).
+//
+// Unix modes do not exist on Windows: there the new file gets the folder's
+// permissions. Callers print fileAccessNote(path) instead of assuming 0600.
 func writeFileExclusive(path string, data []byte, force bool) error {
-	flag := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
 	if !force {
-		flag |= os.O_EXCL
+		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err != nil {
+			return err
+		}
+		return writePrivateAndSync(f, data)
 	}
-	f, err := os.OpenFile(path, flag, 0o600)
+	if err := checkReplaceableFile(path); err != nil {
+		return err
+	}
+	dir := filepath.Dir(path)
+	// os.CreateTemp opens a new name with O_CREATE|O_EXCL and mode 0600.
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return err
+	}
+	tmpPath := tmp.Name()
+	if err := writePrivateAndSync(tmp, data); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := renameReplacing(tmpPath, path); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	syncDir(dir)
+	return nil
+}
+
+// writePrivateAndSync writes data to a file the caller has just created,
+// syncs it and closes it.
+func writePrivateAndSync(f *os.File, data []byte) error {
+	if runtime.GOOS != "windows" {
+		// The file is new, so its mode is 0600 less the umask; make it exactly
+		// 0600 before the secret goes in. A file system that cannot keep Unix
+		// modes (FAT on a USB stick, for one) refuses or ignores this; the
+		// written file's real mode is then shown by fileAccessNote.
+		_ = f.Chmod(0o600)
 	}
 	if _, err := f.Write(data); err != nil {
 		_ = f.Close()
 		return err
 	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
 	return f.Close()
+}
+
+// checkReplaceableFile lets --force replace path only if it does not exist
+// or is a regular file with a single name. Replacing a symbolic link would
+// move the secret off wherever the link pointed (an encrypted volume, say),
+// and the old code wrote through the link instead. A file with other hard
+// links would keep its old contents under the other names, so a backup made
+// that way would silently hold the old words.
+func checkReplaceableFile(path string) error {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	mode := info.Mode()
+	if mode&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to replace %s: it is a symbolic link (give the path of the file itself)", path)
+	}
+	notAFile := mode.IsDir() || mode&(os.ModeNamedPipe|os.ModeSocket|os.ModeDevice|os.ModeCharDevice) != 0
+	// Windows reports some ordinary files as ModeIrregular (OneDrive
+	// placeholders and other reparse points), so only Unix requires IsRegular.
+	if runtime.GOOS != "windows" && !mode.IsRegular() {
+		notAFile = true
+	}
+	if notAFile {
+		return fmt.Errorf("refusing to replace %s: it is not a regular file", path)
+	}
+	if links := hardLinkCount(info); links > 1 {
+		return fmt.Errorf("refusing to replace %s: it has %d hard links, and the other names would keep the old contents (remove them or choose another path)", path, links)
+	}
+	return nil
+}
+
+// renameReplacing renames from over to. On Windows a virus scanner or the
+// search indexer can hold a file for a moment, so a sharing violation is
+// retried briefly (as pkg/fileutil.WriteFileAtomic does).
+func renameReplacing(from, to string) error {
+	var err error
+	for attempt := 1; attempt <= 8; attempt++ {
+		if err = os.Rename(from, to); err == nil || !renameRetryable(err) {
+			return err
+		}
+		time.Sleep(time.Duration(attempt) * 25 * time.Millisecond)
+	}
+	return err
+}
+
+// syncDir makes a finished rename durable. Best effort: some file systems
+// cannot sync a directory, and Windows cannot open one this way.
+func syncDir(dir string) {
+	if runtime.GOOS == "windows" {
+		return
+	}
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
+}
+
+// fileAccessNote says who can read a file the CLI has just written, for its
+// messages: the real Unix mode, with a warning when it is not private (a
+// file system such as FAT does not keep 0600), or on Windows, where Unix
+// modes do not apply, that the folder's permissions do.
+func fileAccessNote(path string) string {
+	if runtime.GOOS == "windows" {
+		return "Windows: the folder's permissions apply"
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return "mode unknown: " + err.Error()
+	}
+	perm := info.Mode().Perm()
+	if perm&0o077 != 0 {
+		return fmt.Sprintf("mode %04o; WARNING: other users may be able to read it, this file system did not keep mode 0600", perm)
+	}
+	return fmt.Sprintf("mode %04o", perm)
 }

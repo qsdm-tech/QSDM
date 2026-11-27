@@ -10,7 +10,7 @@ require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/gocql/gocql v1.7.0
 	github.com/joho/godotenv v1.5.1
-	github.com/klauspost/compress v1.20.3
+	github.com/klauspost/compress v1.20.4
 	github.com/libp2p/go-libp2p v0.51.0
 	github.com/libp2p/go-libp2p-pubsub v0.16.0
 	github.com/mattn/go-sqlite3 v1.14.53
@@ -21,15 +21,16 @@ require (
 require (
 	github.com/cloudflare/circl v1.6.3
 	github.com/google/uuid v1.6.0
-	github.com/gorilla/websocket v1.5.3
+	github.com/gorilla/websocket v1.5.4-0.20240701034025-d67f41855da4
 	github.com/libp2p/go-yamux/v5 v5.1.0
 	github.com/multiformats/go-multiaddr v0.16.1
 	github.com/pbnjay/memory v0.0.0-20210728143218-7b4eea64cf58
 	github.com/tetratelabs/wazero v1.12.0
 	github.com/tyler-smith/go-bip39 v1.1.0
-	golang.org/x/crypto v0.58.0
+	golang.org/x/crypto v0.59.0
+	golang.org/x/mod v0.42.0
 	golang.org/x/sys v0.50.0
-	golang.org/x/term v0.47.0
+	golang.org/x/term v0.48.0
 	golang.org/x/tools v0.52.0
 )
 
@@ -109,11 +110,10 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.28.0 // indirect
 	golang.org/x/exp v0.0.0-20260718201538-764159d718ef // indirect
-	golang.org/x/mod v0.42.0 // indirect
 	golang.org/x/net v0.62.0 // indirect
-	golang.org/x/sync v0.24.0 // indirect
+	golang.org/x/sync v0.25.0 // indirect
 	golang.org/x/telemetry v0.0.0-20261009151841-97e8ea77aa2a // indirect
-	golang.org/x/text v0.43.0 // indirect
+	golang.org/x/text v0.44.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	golang.org/x/xerrors v0.0.0-20240903120638-7835f813f4da // indirect
 	google.golang.org/protobuf v1.36.11 // indirect

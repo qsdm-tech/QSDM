@@ -44,6 +44,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/blackbeardONE/QSDM/pkg/buildinfo"
@@ -69,12 +70,13 @@ type ConsumerFlags struct {
 	// Auto-update knobs. When AutoUpdate > 0 the miner runs a
 	// background goroutine that polls UpdateURL for a fresh
 	// release every AutoUpdate, stages the new binary at
-	// <currentExe>.next on a SHA-256 match, and applies any
-	// staged update at the next startup (atomic rename + exec).
+	// <currentExe>.next following signed manifest verification, and applies
+	// the re-verified update at the next startup.
 	// AutoUpdate=0 (default) keeps the legacy behaviour: the
 	// miner never reaches out for updates.
-	AutoUpdate time.Duration
-	UpdateURL  string
+	AutoUpdate    time.Duration
+	UpdateURL     string
+	UpdateKeyFile string
 
 	// ApplyStaged is the "do exactly one thing then exit" knob:
 	// apply any staged update and exit. Useful for ops scripts
@@ -90,23 +92,23 @@ type ConsumerFlags struct {
 // Defaults are picked to "do the right thing" for a desktop user
 // who hasn't read the docs:
 //
-//   --idle-only=false           (must opt in; some users want full speed)
-//   --idle-threshold=10         (10% utilization is "idle" — accounts
-//                                for desktop compositor noise)
-//   --idle-grace=60s            (1 minute of idle before resume; long
-//                                enough that closing a game and
-//                                immediately opening another doesn't
-//                                trigger a hashrate spike during the
-//                                load screen)
-//   --idle-poll=5s              (5s nvidia-smi cadence is invisible
-//                                to the user but resumes mining
-//                                quickly enough that the operator
-//                                doesn't notice idle gaps)
-//   --service=false             (default off; --service implies log-
-//                                file at <homedir>/.qsdm/miner.log)
-//   --log-file=""               (empty = stdout/stderr unchanged)
-//   --log-size-mb=10            (10 MiB per rotated file)
-//   --log-keep=5                (keep 5 generations = ~50 MiB ceiling)
+//	--idle-only=false           (must opt in; some users want full speed)
+//	--idle-threshold=10         (10% utilization is "idle" — accounts
+//	                             for desktop compositor noise)
+//	--idle-grace=60s            (1 minute of idle before resume; long
+//	                             enough that closing a game and
+//	                             immediately opening another doesn't
+//	                             trigger a hashrate spike during the
+//	                             load screen)
+//	--idle-poll=5s              (5s nvidia-smi cadence is invisible
+//	                             to the user but resumes mining
+//	                             quickly enough that the operator
+//	                             doesn't notice idle gaps)
+//	--service=false             (default off; --service implies log-
+//	                             file at <homedir>/.qsdm/miner.log)
+//	--log-file=""               (empty = stdout/stderr unchanged)
+//	--log-size-mb=10            (10 MiB per rotated file)
+//	--log-keep=5                (keep 5 generations = ~50 MiB ceiling)
 func RegisterConsumerFlags(fs *flag.FlagSet, out *ConsumerFlags) {
 	fs.BoolVar(&out.IdleOnly, "idle-only", false,
 		"only mine when the GPU is otherwise idle (probes nvidia-smi); pauses mining while you game / video-call")
@@ -127,11 +129,13 @@ func RegisterConsumerFlags(fs *flag.FlagSet, out *ConsumerFlags) {
 		"number of rotated log files to retain")
 
 	fs.DurationVar(&out.AutoUpdate, "auto-update", 0,
-		"poll <update-url> every N for a fresh release; download + sha256-verify + stage as <exe>.next; auto-apply at next startup. Set to 0 to disable.")
-	fs.StringVar(&out.UpdateURL, "update-url", "https://qsdm.tech/releases",
+		"poll the signed update feed every N and apply a verified update at next startup; 0 disables polling")
+	fs.StringVar(&out.UpdateURL, "update-url", "https://qsdm.tech/downloads/console-v1",
 		"base URL for the release manifest + binaries (no trailing slash)")
+	fs.StringVar(&out.UpdateKeyFile, "update-public-key-file", "",
+		"trusted release public key file (hex ML-DSA-87), required for staging or applying updates")
 	fs.BoolVar(&out.ApplyStaged, "apply-staged-update", false,
-		"apply any staged update (<exe>.next) by atomic rename + re-exec, then exit")
+		"re-verify and apply the staged update next to the executable, then exit")
 }
 
 // applyServiceMode redirects stdout+stderr to a rotating log file
@@ -340,22 +344,41 @@ func applyStagedUpdateAtStartup(cf *ConsumerFlags) (applied bool, err error) {
 	stagePath := exe + ".next"
 	if _, err := os.Stat(stagePath); errors.Is(err, os.ErrNotExist) {
 		if cf.ApplyStaged {
-			fmt.Fprintln(os.Stderr,
-				"qsdmminer: --apply-staged-update set but no staged update found at "+stagePath)
-			os.Exit(1)
+			return false, updater.ErrNoStagedUpdate
 		}
 		return false, nil
 	} else if err != nil {
 		return false, fmt.Errorf("stat staged update: %w", err)
 	}
-	fmt.Fprintf(os.Stderr,
-		"qsdmminer: applying staged update from %s (atomic rename + re-exec)\n",
-		stagePath)
-	// ApplyStaged either exits the process via os.Exit(0) on
-	// success OR returns an error. Returning err==nil here
-	// would be a bug — but we wrap defensively.
-	err = updater.ApplyStaged(stagePath, exe, os.Args)
-	return false, err
+	u, err := newConsoleUpdater(cf)
+	if err != nil {
+		return false, err
+	}
+	if !cf.ApplyStaged {
+		return u.ApplyStagedIfPresent(exe, os.Args)
+	}
+
+	// The replacement process should run the remaining requested flags.
+	argv := []string{os.Args[0]}
+	for _, arg := range os.Args[1:] {
+		name, _, _ := strings.Cut(arg, "=")
+		if name != "--apply-staged-update" && name != "-apply-staged-update" {
+			argv = append(argv, arg)
+		}
+	}
+	return false, u.ApplyStaged(stagePath, exe, argv)
+}
+
+func newConsoleUpdater(cf *ConsumerFlags) (*updater.Updater, error) {
+	return updater.New(updater.Config{
+		BaseURL:        cf.UpdateURL,
+		Component:      "qsdmminer",
+		GOOS:           runtime.GOOS,
+		GOARCH:         runtime.GOARCH,
+		CurrentVersion: buildinfo.Version,
+		HTTPClient:     &http.Client{Timeout: 30 * time.Second},
+		TrustedKeyFile: cf.UpdateKeyFile,
+	})
 }
 
 // runAutoUpdater starts the background updater goroutine when
@@ -384,15 +407,7 @@ func runAutoUpdater(ctx context.Context, cf *ConsumerFlags) {
 			"qsdmminer: --auto-update enabled but build is 'dev' (no buildinfo injection); skipping")
 		return
 	}
-	cli := &http.Client{Timeout: 30 * time.Second}
-	u, err := updater.New(updater.Config{
-		BaseURL:        cf.UpdateURL,
-		Component:      "qsdmminer",
-		GOOS:           runtime.GOOS,
-		GOARCH:         runtime.GOARCH,
-		CurrentVersion: cur,
-		HTTPClient:     cli,
-	})
+	u, err := newConsoleUpdater(cf)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "qsdmminer: auto-updater disabled: %v\n", err)
 		return

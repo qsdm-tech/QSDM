@@ -211,6 +211,43 @@ describe('reusing the enrollment that already holds the GPU', () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('rewrites miner settings that have CR line endings with LF only', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qsdm-adopt-cr-'));
+    try {
+      const configPath = path.join(dir, 'miner.toml');
+      const hmacKeyPath = path.join(dir, 'miner-hmac.key');
+      const keyHex = '07'.repeat(32);
+      const damaged =
+        'protocol = "v2"\r\nnode_id = "hive-new-pc-01"\rgpu_uuid = "GPU-ABC"\r';
+      fs.writeFileSync(configPath, damaged);
+      fs.writeFileSync(hmacKeyPath, `${keyHex}\n`);
+
+      writeQsdmAdoptedMinerIdentity(
+        {
+          uuid: 'GPU-ABC',
+          name: 'NVIDIA GeForce RTX 3050',
+          computeCapability: '8.6',
+          driverVersion: '572.16',
+          cudaVersion: '12.8',
+          architecture: 'ampere',
+          nodeId: 'hive-new-pc-01',
+          hmacKeyPath,
+          configPath,
+        },
+        'hive-old-pc-0123456789ab',
+        keyHex,
+        1
+      );
+
+      expect(fs.readFileSync(configPath, 'utf8')).toBe(
+        'protocol = "v2"\nnode_id = "hive-old-pc-0123456789ab"\ngpu_uuid = "GPU-ABC"\n'
+      );
+      expect(fs.readFileSync(`${configPath}.bak-1`, 'utf8')).toBe(damaged);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('qsdmMinerEnrollment', () => {

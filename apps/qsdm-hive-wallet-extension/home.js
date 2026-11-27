@@ -142,11 +142,12 @@
     useHiveButton.disabled = false;
   };
 
-  const openAccountLogin = async (loginMethod) => {
-    const loginLabel = loginMethod === "telegram" ? "Telegram" : "email";
-    setNotice(`Opening secure ${loginLabel} login...`);
+  // QSDM Account shows the sign-in ways it has turned on. Wallet sign-in is
+  // always one of them: Hive signs the sign-in message after you approve it.
+  const openAccountLogin = async () => {
+    setNotice("Opening QSDM Account...");
     const target = new URL(ACCOUNT_URL);
-    target.searchParams.set("login", loginMethod);
+    target.searchParams.set("login", "wallet");
     target.searchParams.set("source", "extension");
     await chrome.tabs.create({ url: target.toString() });
   };
@@ -157,8 +158,8 @@
   };
 
   document
-    .getElementById("telegram-login")
-    .addEventListener("click", () => void openAccountLogin("telegram"));
+    .getElementById("account-login")
+    .addEventListener("click", () => void openAccountLogin());
 
   useHiveButton.addEventListener("click", async () => {
     if (!walletAddress) return;

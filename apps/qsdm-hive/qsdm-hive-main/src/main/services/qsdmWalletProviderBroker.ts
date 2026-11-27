@@ -3,11 +3,13 @@ import { randomBytes, timingSafeEqual } from 'crypto';
 import { BrowserWindow, dialog } from 'electron';
 import fs from 'fs';
 import http from 'http';
+import os from 'os';
 import path from 'path';
 
 import { getQsdmCellAccount } from 'main/controllers/qsdm/getQsdmCellAccount';
 import { getAppDataPath } from 'main/node/helpers/getAppDataPath';
 
+import { assertSignMessageOrigin } from './qsdmSignMessageOrigin';
 import { signQsdmMessageWithCli } from './qsdmTaskActions';
 import {
   getQsdmTaskActionSender,
@@ -15,6 +17,7 @@ import {
 } from './qsdmTaskActionSigner';
 import { submitQsdmWalletTransferIntent } from './qsdmWalletTransfer';
 
+import type { SignMessageKind } from './qsdmSignMessageOrigin';
 import type { Event } from 'electron';
 import type {
   QsdmWalletProviderPermission,
@@ -244,6 +247,36 @@ const confirmRequest = async ({
   }
 };
 
+const signApproval = (
+  kind: SignMessageKind,
+  origin: string,
+  address: string,
+  message: string
+) => {
+  if (kind === 'account-sign-in') {
+    return {
+      title: 'Sign in to QSDM Account',
+      message: `${origin} wants to sign you in to QSDM Account.`,
+      detail: `Wallet: ${address}\n\nThis only signs you in. It cannot send CELL.\n\nMessage:\n${message}`,
+      approveLabel: 'Sign in',
+    };
+  }
+  if (kind === 'account-link') {
+    return {
+      title: 'Link wallet to QSDM Account',
+      message: `${origin} wants to link this wallet to your QSDM Account.`,
+      detail: `Wallet: ${address}\n\nThis only links the wallet. It cannot send CELL.\n\nMessage:\n${message}`,
+      approveLabel: 'Link wallet',
+    };
+  }
+  return {
+    title: 'Sign QSDM message',
+    message: `${origin} is requesting a wallet signature.`,
+    detail: `Address: ${address}\n\nMessage:\n${message}`,
+    approveLabel: 'Sign',
+  };
+};
+
 const getStringParam = (params: unknown, key: string, required = true) => {
   const value =
     params && typeof params === 'object'
@@ -303,7 +336,12 @@ const sendCell = async ({
       approveLabel: 'Send CELL',
     })
   );
-  return submitQsdmWalletTransferIntent({ recipient, amount });
+  // Sent from the wallet the approval showed, or refused.
+  return submitQsdmWalletTransferIntent({
+    recipient,
+    amount,
+    expectedSender: address,
+  });
 };
 
 export const handleWalletProviderRequest = async (
@@ -399,14 +437,11 @@ export const handleWalletProviderRequest = async (
     if (Buffer.byteLength(message, 'utf-8') > MAX_MESSAGE_BYTES) {
       throw new Error('QSDM messages are limited to 16 KiB');
     }
+    // Refused before any prompt: a message for another website.
+    const kind = assertSignMessageOrigin(message, origin);
     options.showHive();
     await enqueueApproval(() =>
-      confirmRequest({
-        title: 'Sign QSDM message',
-        message: `${origin} is requesting a wallet signature.`,
-        detail: `Address: ${address}\n\nMessage:\n${message}`,
-        approveLabel: 'Sign',
-      })
+      confirmRequest(signApproval(kind, origin, address, message))
     );
     return signQsdmMessageWithCli(message);
   }
@@ -440,6 +475,49 @@ const tokenMatches = (authorization: string | undefined, token: string) => {
   const left = Buffer.from(candidate);
   const right = Buffer.from(token);
   return left.length === right.length && timingSafeEqual(left, right);
+};
+
+const MAX_PUBLIC_ERROR_CHARS = 300;
+const PATH_TAIL = /[^\s"'<>|:,;()]*/;
+const WINDOWS_PATH = /\b[A-Za-z]:[\\/][^\s"'<>|:,;()]*/g;
+const UNC_PATH = /\\\\[^\s"'<>|:,;()]+/g;
+const POSIX_PATH =
+  /\/(?:Users|home|root|tmp|var|opt|private|Volumes|mnt|media|run|snap|Applications)\/[^\s"'<>|:,;()]*/g;
+
+const escapeRegExp = (value: string) =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// Folders whose full names are private to this PC (the home folder carries
+// the user's account name), longest first.
+const getLocalFolders = () =>
+  [os.homedir(), os.tmpdir(), getAppDataPath(), process.resourcesPath]
+    .filter(
+      (folder): folder is string =>
+        typeof folder === 'string' && folder.length > 3
+    )
+    .sort((left, right) => right.length - left.length);
+
+/**
+ * The error text a wallet request gets back. It goes to the browser extension
+ * and from there to the web page that made the request, so local paths (the
+ * qsdmcli location, a file qsdmcli names) are replaced with "<path>" and the
+ * text is cut at 300 characters. The full error is logged in Hive.
+ */
+export const publicErrorText = (error: unknown): string => {
+  let text = error instanceof Error ? error.message : String(error);
+  getLocalFolders().forEach((folder) => {
+    text = text.replace(
+      new RegExp(`${escapeRegExp(folder)}${PATH_TAIL.source}`, 'gi'),
+      '<path>'
+    );
+  });
+  text = text
+    .replace(WINDOWS_PATH, '<path>')
+    .replace(UNC_PATH, '<path>')
+    .replace(POSIX_PATH, '<path>');
+  return text.length > MAX_PUBLIC_ERROR_CHARS
+    ? `${text.slice(0, MAX_PUBLIC_ERROR_CHARS)}...`
+    : text;
 };
 
 const sendJson = (
@@ -478,9 +556,10 @@ export const startQsdmWalletProviderBroker = async (
       const result = await handleWalletProviderRequest(payload, options);
       sendJson(response, 200, { id: payload.id, ok: true, result });
     } catch (error) {
+      console.warn('QSDM wallet provider request failed', error);
       sendJson(response, 400, {
         ok: false,
-        error: error instanceof Error ? error.message : String(error),
+        error: publicErrorText(error),
       });
     }
   });

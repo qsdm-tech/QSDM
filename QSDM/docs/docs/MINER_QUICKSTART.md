@@ -1,7 +1,7 @@
 # MINER_QUICKSTART — Mine CELL on the QSDM pilot network (v2 NVIDIA-locked)
 
 > [!IMPORTANT]
-> **Using QSDM Hive?** Follow [Mining today (Hive 1.4.23)](MINING_TODAY.md)
+> **Using QSDM Hive?** Follow [Mining today (Hive 1.4.27)](MINING_TODAY.md)
 > instead of this page. **Mining is open to every enrolled miner** (since
 > 19 October 2026), in 7-day windows that renew automatically; enrollment
 > reopened on 17 October 2026. Check [Network status](NETWORK_STATUS.md) for
@@ -39,7 +39,7 @@
 > Both miner binaries refuse to start a v1 mining loop against a
 > v2-active validator unless `--allow-v1` is explicitly passed.
 
-> **Compute backend:** Hive 1.4.23 runs the packaged NVIDIA CUDA solver and
+> **Compute backend:** Hive 1.4.27 runs the packaged NVIDIA CUDA solver and
 > fails closed instead of falling back to CPU. For the proof-of-work rules see
 > [Mining protocol v2](MINING_PROTOCOL_V2.md).
 
@@ -224,7 +224,7 @@ The full lifecycle (unbond, slash, watch) is documented in
 ### 4.1 Install (`qsdmminer-console`)
 
 ```bash
-git clone https://github.com/blackbeardONE/QSDM.git
+git clone https://github.com/qsdm-tech/QSDM.git
 cd QSDM/source
 go build -o qsdmminer-console ./cmd/qsdmminer-console
 ```
@@ -296,6 +296,29 @@ After the first successful run, write your settings to
 
 Or hand-edit the file. The schema is documented in the `Config`
 struct at the top of `cmd/qsdmminer-console/main.go`.
+
+### 4.5 Signed updates for the console miner
+
+The console miner checks for updates only when you enable `--auto-update`. Set
+`--update-public-key-file` to a trusted release public key you installed locally.
+The file must contain the hex-encoded ML-DSA-87 public key. Use the [console release public key](../../deploy/release-trust/qsdm-console-release-key-v1.hex) from the official repository.
+The key fingerprint is the SHA-256 of the decoded key bytes.
+`f03d0b24865b15a9a2f6edc0d40efe67d5f3050978c346adea84e8653a5957b7`. Set `--update-url` if your
+operator uses a separate release host. The default signed feed is
+`https://qsdm.tech/downloads/console-v1`. Install and verify the first signed
+release manually before enabling automatic updates.
+
+The release host publishes the binary, `MANIFEST.json`, and
+`MANIFEST.json.sig` under the version directory before updating `latest.txt`.
+The signature file contains the hex-encoded ML-DSA-87 signature over the exact
+manifest bytes. The release owner can create it offline with
+`qsdmcli wallet sign --in <release-keystore> --message-file MANIFEST.json`.
+Publish newer `v`-prefixed semantic versions for updates.
+
+The miner verifies the signature before downloading and re-verifies the
+signature, artifact size and SHA-256 before installing. Manual
+`--apply-staged-update` uses the same key and checks. For an unsigned feed or
+a legacy staged file, use your release owner's verified installer to update.
 
 ## 5. Lifecycle commands
 
@@ -855,7 +878,7 @@ If the validator's `/api/v1/mining/challenge` endpoint is unreachable (503, netw
 |---|---|---|
 | `[preflight] REFUSING TO MINE` at startup | Validator advertises v2 active but binary was launched in v1 mode (no `--protocol=v2`, or `cmd/qsdmminer` against the live network). | Pass `--protocol=v2` with full v2 config; OR for local audit only, pass `--allow-v1`. |
 | `v2 prepare: enrollment not active` | The `/api/v1/mining/enrollment/{node_id}` poller sees `phase != active`. | Run `qsdmcli enrollment-status <node-id>`; if `not_found`, your enroll tx hasn't mined; if `pending_unbond` / `revoked`, re-enroll. |
-| Enrollment refused: `gpu_uuid already bound to an active enrollment` | One GPU can back only one active enrollment, and this GPU already has one. Hive 1.4.22 and older made a new node ID after a Windows reinstall, a new PC name, a lost `.qsdm` folder or another wallet, and the chain refuses the second enrollment. | Update to Hive 1.4.23: it finds and reuses the enrollment by itself when Hive holds the wallet that owns it. An enrollment owned by another wallet can be ended only by that wallet (unenroll). After an unenroll the GPU can enroll again at once; the old bond is held for 201,600 blocks (about 23 days) and then returns to its owner. |
+| Enrollment refused: `gpu_uuid already bound to an active enrollment` | One GPU can back only one active enrollment, and this GPU already has one. Hive 1.4.22 and older made a new node ID after a Windows reinstall, a new PC name, a lost `.qsdm` folder or another wallet, and the chain refuses the second enrollment. | Update to Hive 1.4.27: it finds and reuses the enrollment by itself when Hive holds the wallet that owns it. An enrollment owned by another wallet can be ended only by that wallet (unenroll). After an unenroll the GPU can enroll again at once; the old bond is held for 201,600 blocks (about 23 days) and then returns to its owner. |
 | `attestation_stale` rejections from `/api/v1/mining/submit` | Local clock skew >60 s (the `FreshnessWindow`), or validator's `/challenge` endpoint is stalling. | Re-sync NTP; check the `challenge=Ns ago` figure in the live panel. |
 | `attestation_invalid` rejections | HMAC key mismatch — your enrollment record holds a different key than the file `--hmac-key-path` points at. | Verify `sha256sum $HOME/.qsdm/hmac.key` matches the enrollment record; re-enroll if mis-keyed. |
 | `self-test FAILED: solve: context deadline exceeded` | `--self-test-difficulty` is too high for this CPU. | Re-run with `--self-test-difficulty=2` (default). |
@@ -904,7 +927,7 @@ The legitimate uses for the v1 path are:
 ### A.1 Build
 
 ```bash
-git clone https://github.com/blackbeardONE/QSDM.git
+git clone https://github.com/qsdm-tech/QSDM.git
 cd QSDM/source
 go build -o qsdmminer ./cmd/qsdmminer
 ```

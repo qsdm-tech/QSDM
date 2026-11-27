@@ -1,6 +1,11 @@
 import { Event } from 'electron';
 
+import { isQsdmMinerSystemTaskId } from 'config/qsdmSystemTasks';
 import qsdmHiveTasks from 'main/services/qsdmHiveTasks';
+import {
+  isQsdmNoNvidiaGpuPc,
+  QSDM_NO_NVIDIA_GPU_MESSAGE,
+} from 'main/services/qsdmMinerEnrollment';
 import { ErrorType } from 'models';
 import { throwDetailedError } from 'utils';
 
@@ -19,6 +24,9 @@ export const startAllTasks = async (
   try {
     const startedTasks = await qsdmHiveTasks.getStartedTasks();
     const schedulerTasks = await getSchedulerTasks({} as Event);
+    // Asked once, only when a miner task would start: a PC without an NVIDIA
+    // GPU leaves both miner tasks stopped instead of failing on every launch.
+    let noNvidiaGpu: Promise<boolean> | undefined;
 
     for (const rawTaskData of startedTasks) {
       if (!rawTaskData.is_running) {
@@ -35,6 +43,16 @@ export const startAllTasks = async (
           console.warn(`Task ${rawTaskData.task_id} isn't scheduled, skip it.`);
           // eslint-disable-next-line no-continue
           continue;
+        }
+        if (isQsdmMinerSystemTaskId(rawTaskData.task_id)) {
+          noNvidiaGpu = noNvidiaGpu || isQsdmNoNvidiaGpuPc();
+          if (await noNvidiaGpu) {
+            console.warn(
+              `${QSDM_NO_NVIDIA_GPU_MESSAGE} Not starting ${rawTaskData.task_id}.`
+            );
+            // eslint-disable-next-line no-continue
+            continue;
+          }
         }
         try {
           await startTask({} as Event, {

@@ -39,7 +39,9 @@ Run
     python QSDM/deploy/install_ngc_sidecar_vps.py --host other.qsdm.tech
 
 Requires paramiko locally (pip install paramiko) and an ed25519 key
-in ~/.ssh/id_ed25519 authorized on the VPS.
+in ~/.ssh/id_ed25519 authorized on the VPS. The VPS host key must already
+be in known_hosts (--known-hosts FILE, else QSDM_SSH_KNOWN_HOSTS, else
+~/.ssh/known_hosts); unknown hosts are refused.
 
 Idempotent: re-running regenerates ngc.env from the current service
 secret, re-writes the systemd units, and restarts the timer.
@@ -52,7 +54,7 @@ import sys
 
 import paramiko
 
-from _deploy_host import DeploymentTargetError, public_api_base, target
+from _deploy_host import DeploymentTargetError, pin_host_keys, public_api_base, target
 
 
 LOCAL_SIDECAR = "apps/qsdm-nvidia-ngc/validator_phase1.py"
@@ -108,6 +110,9 @@ def main() -> int:
     parser.add_argument("--user", help="Override the SSH user for --host.")
     parser.add_argument("--port", help="Override the SSH port for --host.")
     parser.add_argument("--key",  default=os.path.expanduser("~/.ssh/id_ed25519"))
+    parser.add_argument("--known-hosts",
+                        help="known_hosts file that pins the VPS SSH key (default: QSDM_SSH_KNOWN_HOSTS, "
+                             "then ~/.ssh/known_hosts). Unknown hosts are refused.")
     parser.add_argument("--node-id", default="vps-blr1-validator",
                         help="Free-form label (QSDM_NGC_PROOF_NODE_ID).")
     parser.add_argument("--report-url",
@@ -129,7 +134,10 @@ def main() -> int:
 
     key = paramiko.Ed25519Key.from_private_key_file(args.key)
     c = paramiko.SSHClient()
-    c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    try:
+        pin_host_keys(c, args.known_hosts)
+    except DeploymentTargetError as exc:
+        parser.error(str(exc))
     print(f"Target: {resolved_target.display()}")
     c.connect(
         resolved_target.host,

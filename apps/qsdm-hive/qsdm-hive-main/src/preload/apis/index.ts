@@ -1,5 +1,12 @@
+import activateQsdmWallet from './activateQsdmWallet';
 import appRelaunch from './appRelaunch';
-import { checkAppUpdate, onAppDownloaded, onAppUpdate } from './appUpdates';
+import {
+  checkAppUpdate,
+  onAppDownloaded,
+  onAppUpdate,
+  onHiveUpdateRequired,
+  restartToUpdate,
+} from './appUpdates';
 import archiveTask from './archiveTask';
 import { resetPin } from './auth';
 import { fetchS3FolderContents } from './aws';
@@ -23,18 +30,19 @@ import createMissingKPLStakingKey from './createMissingKPLStakingKey';
 import createNodeWallets from './createNodeWallets';
 import createNodeWalletsFromJson from './createNodeWalletsFromJson';
 import createQsdmSignerWallet from './createQsdmSignerWallet';
-import enableQsdmSignerLegacyRecovery from './enableQsdmSignerLegacyRecovery';
 import createReferralCode from './createReferralCode';
 import creditStakingWalletFromMainWallet from './creditStakingWalletFromMainWallet';
 import delegateStake from './delegateStake';
 import disableStayAwake from './disableStayAwake';
 import downloadAppUpdate from './downloadAppUpdate';
+import enableQsdmSignerLegacyRecovery from './enableQsdmSignerLegacyRecovery';
 import enableStayAwake from './enableStayAwake';
 import exportQsdmSignerRecoveryWords from './exportQsdmSignerRecoveryWords';
 import exportQsdmSignerWalletBackup from './exportQsdmSignerWalletBackup';
 import { verifyMessage } from './faucet';
 import fetchKPLTokenMetadata from './fetchKPLTokenMetadata';
 import fetchMultipleKPLTokenMetadata from './fetchMultipleKPLTokenMetadata';
+import forgetQsdmWallet from './forgetQsdmWallet';
 import generateSeedPhrase from './generateSeedPhrase';
 import getAccountBalance from './getAccountBalance';
 import getActiveAccountName from './getActiveAccountName';
@@ -64,6 +72,7 @@ import {
   getQsdmReferralStatus,
 } from './getQsdmReferralStatus';
 import getQsdmSkyFangLinkStatus from './getQsdmSkyFangLinkStatus';
+import getQsdmWalletHistory from './getQsdmWalletHistory';
 import getQsdmWalletProviderPermissions from './getQsdmWalletProviderPermissions';
 import getRentAmount from './getRentAmount';
 import getRetryDataByTaskId from './getRetryDataByTaskId';
@@ -88,6 +97,7 @@ import initializeTasks from './initializeTasks';
 import isValidWalletAddress from './isValidWalletAddress';
 import { fetchKPLList, getKPLBalance, transferKplToken } from './kplTokens';
 import linkQsdmSkyFangAccount from './linkQsdmSkyFangAccount';
+import listQsdmWallets from './listQsdmWallets';
 import { limitLogsSize } from './logger';
 import manageQsdmTaskCatalog from './manageQsdmTaskCatalog';
 import {
@@ -103,6 +113,7 @@ import {
 } from './notifications';
 import onDeepLinkNavigation from './onDeepLinkNavigation';
 import onK2ConnectionError from './onK2ConnectionError';
+import onQsdmWalletChanged from './onQsdmWalletChanged';
 import onSystemWakeUp from './onSystemWakeUp';
 import onVariablesUpdatedFromMainProcess from './onVariablesUpdatedFromMainProcess';
 import openBrowserWindow from './openBrowserWindow';
@@ -113,6 +124,12 @@ import {
   pairQsdmMotherHive,
 } from './pairQsdmMotherHive';
 import { getRunnedPrivateTasks, setRunnedPrivateTasks } from './privateTasks';
+import { getQsdmBountyLedger } from './qsdmBountyLedger';
+import {
+  getQsdmPulsePool,
+  runQsdmPulsePoolAction,
+  setQsdmPulsePool,
+} from './qsdmPulsePool';
 import {
   cancelQsdmVirtualComputeJob,
   getQsdmVirtualComputeJobs,
@@ -122,10 +139,12 @@ import {
 import quitApp from './quitApp';
 import recoverKPLStakingAccount from './recoverKPLStakingAccount';
 import recoverLostTokens from './recoverLostTokens';
+import recoverQsdmWallet from './recoverQsdmWallet';
 import recoverStakingAccount from './recoverStakingAccount';
 import redeemTokensInNewNetwork from './redeemTokensInNewNetwork';
 import registerQsdmReferral from './registerQsdmReferral';
 import removeAccountByName from './removeAccountByName';
+import renameQsdmWallet from './renameQsdmWallet';
 import restoreQsdmSignerWallet from './restoreQsdmSignerWallet';
 import revokeQsdmWalletProviderPermission from './revokeQsdmWalletProviderPermission';
 import runQsdmSignedCellLoop from './runQsdmSignedCellLoop';
@@ -205,6 +224,10 @@ export default {
   getPrivateTasks,
   getQsdmCellAccount,
   getQsdmMinerRewardStatus,
+  getQsdmPulsePool,
+  setQsdmPulsePool,
+  runQsdmPulsePoolAction,
+  getQsdmBountyLedger,
   getQsdmMotherHiveStatus,
   pairQsdmMotherHive,
   disconnectQsdmMotherHive,
@@ -219,6 +242,13 @@ export default {
   exportQsdmSignerWalletBackup,
   exportQsdmSignerRecoveryWords,
   importQsdmSignerWallet,
+  listQsdmWallets,
+  activateQsdmWallet,
+  renameQsdmWallet,
+  forgetQsdmWallet,
+  recoverQsdmWallet,
+  onQsdmWalletChanged,
+  getQsdmWalletHistory,
   restoreQsdmSignerWallet,
   unlockQsdmSignerWallet,
   getQsdmWalletProviderPermissions,
@@ -304,6 +334,8 @@ export default {
   onSystemWakeUp,
   getMainLogs,
   onAppDownloaded,
+  onHiveUpdateRequired,
+  restartToUpdate,
   checkAppUpdate,
   getStartedTasksPubKeys,
   upgradeTask,

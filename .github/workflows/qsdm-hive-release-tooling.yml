@@ -1,0 +1,52 @@
+name: QSDM Hive release tooling
+
+# Tests of the Hive release signer's policy fields (min_supported_version,
+# rollout_percent). Keyless: the test loads the signer's functions and never
+# signs. No secrets.
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "QSDM/deploy/scripts/new_hive_release_manifest.ps1"
+      - "QSDM/deploy/scripts/test_new_hive_release_manifest.ps1"
+      - ".github/workflows/qsdm-hive-release-tooling.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "QSDM/deploy/scripts/new_hive_release_manifest.ps1"
+      - "QSDM/deploy/scripts/test_new_hive_release_manifest.ps1"
+
+concurrency:
+  group: qsdm-hive-release-tooling-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  signer-policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Test the signer's policy fields (pwsh)
+        shell: pwsh
+        run: ./QSDM/deploy/scripts/test_new_hive_release_manifest.ps1
+
+  signer-policy-windows:
+    # Windows PowerShell 5.1: the release is signed with it.
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Test the signer's policy fields (Windows PowerShell 5.1)
+        shell: powershell
+        run: ./QSDM/deploy/scripts/test_new_hive_release_manifest.ps1

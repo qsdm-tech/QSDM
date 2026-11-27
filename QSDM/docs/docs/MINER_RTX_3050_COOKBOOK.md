@@ -3,7 +3,7 @@
 > [!IMPORTANT]
 > **Historical build-from-source notes.** This page predates QSDM Hive 1.4.21
 > and is not how most people mine today. Hive ships the miner and CUDA solver
-> for you: follow [Mining today (Hive 1.4.23)](MINING_TODAY.md). Mining is open
+> for you: follow [Mining today (Hive 1.4.27)](MINING_TODAY.md). Mining is open
 > to every enrolled miner (since 19 October 2026), in 7-day windows that renew
 > automatically.
 
@@ -84,7 +84,7 @@ gcc --version           # → MSYS2 mingw64 12.x+
 ## 2. Build the CUDA fatbin + the cuda-tagged miner
 
 ```powershell
-git clone https://github.com/blackbeardONE/QSDM
+git clone https://github.com/qsdm-tech/QSDM
 cd QSDM
 
 # Narrow the build to your arch — sm_86 = RTX 30-series (Ampere consumer).

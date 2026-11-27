@@ -21,6 +21,12 @@ export type HiveVersionPolicyStatus = {
   // False on macOS: no signed Mac release exists for Hive to install itself,
   // so the update screen sends the user to the download page.
   selfUpdates?: boolean;
+  // With the release's min_supported_version: the newest release, and
+  // whether this (still compatible) Hive is older than it.
+  latestVersion?: string | null;
+  updateAvailable?: boolean;
+  // A verified update is downloaded and installs on restart.
+  updateDownloadedVersion?: string;
 };
 
 export default (

@@ -1,4 +1,50 @@
-## [Unreleased]
+## [1.4.28]
+
+- Signing: when a message names its website on an `Origin:` line, as the QSDM Account sign-in and wallet-link messages do, Hive signs it only when that website asks. A QSDM Account message must name exactly one website. Other messages are signed as before.
+- QSDM Account sign-in and wallet-link requests show a plain "Sign in to QSDM Account" / "Link wallet to QSDM Account" approval that says it cannot send CELL.
+- Browser wallet extension 0.6.1: "Sign in to QSDM Account" on the welcome page replaces "Continue with Telegram", which led to a sign-in that is turned off. The extension makes the same website check before it opens an approval window.
+- Updates: the signed release feed can carry `min_supported_version` and `rollout_percent`. A normal release keeps older Hives mining; only a security release blocks them. With a rollout below 100%, automatic update checks offer the new version to that share of installs, chosen by a random install ID that stays on the computer and is never sent. A check the user asks for, a security release and a Hive below the minimum are never held back.
+- Tests: end-to-end tests drive the real app (launch, create wallet, wallet switch, Recent transactions, Bug Bounty row). The test mode is ignored by packaged builds.
+
+## [1.4.27]
+
+- Tasks: Hive starts a task only when the QSDM task catalog lists it, and then builds the task's runner itself. It never downloads task code: there is no fallback to a `main.js` from IPFS or Arweave. The runner is built again on every start, so an old file in `executables/` never runs. When the catalog cannot be read, the start stops with "The QSDM task catalog is unavailable; try again."; a task the catalog does not list stops with "This task is not in the QSDM catalog." (#263).
+- Task files: a task ID, program ID or metadata ID from the network becomes a file or folder name only when it is one plain name, and every path built from it must stay inside its folder. This covers the task's runner, its folder and log, the task and metadata caches, the log folder Hive opens, the folder removed when a task is archived and the migration folder (#263).
+- Task thumbnails: Hive fetches them only over HTTPS, with certificate checks on, and a redirect may not leave HTTPS. A download stops after 15 seconds or 5 MiB (#263).
+- Connected sites: an error reply from the Hive wallet to a web page no longer contains local file paths (they read `<path>`) and is at most 300 characters long. Hive's own log keeps the full error (#263).
+- Libraries: Electron 43.8.12 (was 43.1.1), axios 1.21.1, DOMPurify 3.4.18, React Router 6.30.6, js-yaml 4.3.2, ip-address 10.7.6, basic-ftp 6.2.6 and other updates. Express 4.22.3 is now a declared dependency of Hive's main process (#265).
+- Native programs: `qsdmcli` and the miner are built from this release's source; the wallet host, the CUDA solver and the Edge programs (1.3.7) are the same files as in Hive 1.4.26.
+
+## [1.4.26]
+
+- Wallet switch: after a switch, Hive never shows or sends with the previous wallet. Balances are kept per address, and every wallet screen reloads when the active wallet changes. Each send carries the address the screen showed. If the active wallet changed, Hive refuses the send with "The active wallet changed. Check the amount and send again." Switching is refused while a send is in progress (#254).
+- **Recent transactions** in Settings > Wallet, for the active wallet. Hive logs its own sends per wallet in `hive-signer/wallet-sends/<address>.json` (transaction ID, recipient, amount, fee and time; no secrets). A send shows as Pending at once, then Confirmed or Failed. Once the network serves `GET /wallet/history`, Hive merges that history in, with received transactions and a **Mining rewards** view. Until then it links to the explorer for older and received transactions. A row opens the transaction in the explorer, and **Load more** shows older ones (#254).
+- **QSDM Bug Bounty** row at the top of the task list. It is information, not a task. It links to the private GitHub report form, the published advisories, the rules and the leaderboard. It shows the active wallet's bounty total, this month's top 3 and the all-time top 10 (#250).
+- Miner settings: the miner now reads `miner.toml` with CRLF or lone CR line endings. An older Hive could leave a lone CR in that file, and mining stopped with `toml: ... control characters: '0x0d'`. Hive now writes `miner.toml` with LF only, and rewrites a file that has CRs, keeping a `.bak` copy (#253).
+- When the miner fails to start, Hive shows that start's own error from the task log, with secrets removed, instead of an old `miner.log` tail (#253).
+- A PC without an NVIDIA GPU no longer starts the miner. Hive says "This PC has no NVIDIA GPU. QSDM mining needs one." (#253).
+- Enrollment: while a miner runs, Hive checks its enrollment every 30 seconds. From block 1,190,000 the chain removes "Use mining earnings" enrollments whose bond has not filled in 60,480 blocks. When that happens, Hive enrolls again with your saved choice ("Use mining earnings" or "Lock CELL now") and restarts the miner. Without a saved choice, it stops the miner and says why. It never locks CELL you did not choose to lock (#253).
+- Start readiness respects `fully_bonded`: a miner whose "Use mining earnings" bond is still filling can start with an empty wallet (#253).
+- The two miner tasks no longer send a signed "stop" transaction when they stop. It used a wallet nonce for nothing. Other tasks still send it (#253).
+- Rate limits: when the network answers HTTP 429, Hive waits as long as `Retry-After` says and sends the request again, at most 60 seconds in total. Every request to that server waits together. A resent transfer cannot spend twice: the network refuses a repeated nonce (#253).
+- Updates: a **Restart to update** banner replaces the window that forced an update. When a release allows this version (`min_supported_version`, below), Hive keeps working, mining included, until you restart. Actions that need the new version say "Restart to update" and offer the button (#253).
+- Release manifest: the signed manifest may carry an optional `min_supported_version`. A Hive at or above it keeps working; below it, Hive is blocked as before. Without the field, Hive must match `version` exactly, as before. Hive 1.4.25 and older ignore the field (#253).
+- `qsdmcli` (bundled in Hive): with `--force`, the keystore and the recovery words go to a new owner-only file (0600 on Linux and macOS), which then replaces the target. The old file's mode and links never carry over. A symbolic link, a directory or a file with more than one hard link at the target is refused, and the messages print the file's real mode. This covers `wallet new`, `wallet export-recovery --out` and `wallet enable-recovery` (#252).
+- Native programs: `qsdmcli` (#252) and the miner (#253) are built from this release's source; the wallet host, the CUDA solver and the Edge programs (1.3.7) are the same files as in Hive 1.4.25.
+
+## [1.4.25]
+
+- Several wallets in one Hive. **Create**, **Import** and **Restore with 24 Words** now ADD a wallet; they never replace or delete one. Up to 1.4.24, importing or restoring a wallet replaced the active wallet and kept the old one only as a `wallet.json.bak-<time>` file. Settings > Wallet lists every wallet with its name and address, marks the active one, and has **Use This Wallet**, **Rename** and **Remove**. With a wallet already in Hive, a new one becomes active only when **Switch to the new wallet now** is ticked. The QSDM Miner, the QSDM Pool Miner, Transfer and connected sites use the active wallet; switching is refused while a miner task runs. **Remove** needs the full address typed again, cannot remove the active wallet, and moves the wallet's files to a trash folder instead of deleting them. Each wallet keeps its own OS-protected passphrase entry.
+- On first start, Hive copies the existing wallet into the new wallet list without changing the active wallet, and offers wallets that an older Hive set aside (`wallet.json.bak-<time>`) under **Recovered wallets** with an **Add Back** button (with their saved passphrase entry, when one was kept beside them).
+- Restoring a wallet that is already in Hive with its 24 words (for example after a forgotten passphrase) renews only that wallet's passphrase entry and keeps its previous files beside it.
+- Task list: without the chain catalog (for example while QSDM Core restarts), Hive lists only tasks a user can run (#239).
+- Native programs: `qsdmcli` and the miner are rebuilt from this release's source (golang.org/x/crypto 0.59.0, #242); the wallet host, the CUDA solver and the Edge programs (1.3.7) are the same files as in Hive 1.4.24.
+
+## [1.4.24]
+
+- Pool mining (PULSE): a new task, **QSDM Pool Miner**, mines with the QSDM pool at [qsdm.tech/pool](https://qsdm.tech/pool) with one Start button. The first start unlocks the wallet, enrolls the GPU if needed, and asks once to join the pool (rewards collect in an escrow nobody can spend, the network pays every block, 1% pool fee, capped by the network at 3%; leave at any time and take unsettled rewards back after about a day). Later starts are one click. Before the network's PULSE rule is active (block 1,210,000), the task says so and mines solo. If the pool cannot be reached for 5 minutes, it mines solo and returns to the pool by itself. Only one miner task runs at a time.
+- The QSDM Miner task gains an optional "QSDM pool (PULSE)" panel (off by default) with join, leave and reclaim; solo mining stays the default.
+- Native programs: `qsdmcli` (new `wallet sign-pulse-action` for pool join, leave and reclaim) and the miner (`qsdmminer-console`, pool mode with per-share receipts) are built from this release's source. The wallet host, the CUDA solver and the Edge programs (1.3.7) are the same files, byte for byte, as in Hive 1.4.23.
 
 ## [1.4.23]
 
