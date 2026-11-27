@@ -207,10 +207,10 @@ type        = "sqlite"
 sqlite_path = "/app/data/qsdm.db"
 
 [consensus]
-# Every upgraded validator signs immediately. Keep enforcement off until all
-# validators agree on one future activation height.
-require_signed_votes = false
-signed_message_activation_height = 0
+# New private network: require signatures from block 1.
+# Existing networks should use the coordinated rollout below.
+require_signed_votes = true
+signed_message_activation_height = 1
 signer_key_path = "qsdm_consensus_signer.json"
 
 [logging]
@@ -237,9 +237,13 @@ If you see an error mentioning `roleguard`, re-read §1 of
 mining in a validator binary, which is unsupported.
 
 Back up /app/data/qsdm_consensus_signer.json after first start. It is a
-validator-only hot key, not a CELL wallet. Follow
-[SIGNED_CONSENSUS_ROLLOUT.md](./SIGNED_CONSENSUS_ROLLOUT.md) before enabling
-signature enforcement.
+validator-only hot key. Store it separately from your CELL wallet keys. For
+an existing private network, follow
+[SIGNED_CONSENSUS_ROLLOUT.md](./SIGNED_CONSENSUS_ROLLOUT.md) to coordinate
+signature enforcement. If your private network uses paid edge settlements,
+configure the same authorized relay keys and
+[relay-only activation height](./CONSENSUS_RULES.md#relay-only-paid-edge-tasks-from-block-833800)
+on the participating nodes.
 
 ---
 
