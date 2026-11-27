@@ -367,10 +367,10 @@ func (ct *CallTracer) Recent(n int) []*CallTrace {
 	if n > len(ct.order) {
 		n = len(ct.order)
 	}
-	start := len(ct.order) - n
-	out := make([]*CallTrace, 0, n)
-	for i := len(ct.order) - 1; i >= start; i-- {
-		if t, ok := ct.traces[ct.order[i]]; ok {
+	recentOrder := ct.order[len(ct.order)-n:]
+	out := make([]*CallTrace, 0, len(recentOrder))
+	for i := len(recentOrder) - 1; i >= 0; i-- {
+		if t, ok := ct.traces[recentOrder[i]]; ok {
 			out = append(out, t)
 		}
 	}
