@@ -202,10 +202,10 @@ func (rs *ReceiptStore) Recent(n int) []*TxReceipt {
 	if n > len(rs.order) {
 		n = len(rs.order)
 	}
-	start := len(rs.order) - n
-	out := make([]*TxReceipt, 0, n)
-	for i := len(rs.order) - 1; i >= start; i-- {
-		if r, ok := rs.byTxID[rs.order[i]]; ok {
+	recentOrder := rs.order[len(rs.order)-n:]
+	out := make([]*TxReceipt, 0, len(recentOrder))
+	for i := len(recentOrder) - 1; i >= 0; i-- {
+		if r, ok := rs.byTxID[recentOrder[i]]; ok {
 			out = append(out, r)
 		}
 	}
